@@ -336,7 +336,16 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           body: candidate.text,
           media: [],
           status: 'draft',
-          scheduledFor: null,
+          /**
+           * Scheduled by default, not immediate.
+           *
+           * A post that goes out the instant it is approved leaves no gap to
+           * change your mind in, and the operator asked for the safer default.
+           * `toLocalInputValue(null)` is the same hour-from-now the picker
+           * suggests when empty, so the time on the card is exactly the time
+           * shown — nothing is stored that cannot be seen.
+           */
+          scheduledFor: fromLocalInputValue(toLocalInputValue(null)),
           approvedBy: null,
           approvedAt: null,
           postUrl: null,
