@@ -85,10 +85,39 @@ function getApiKey() {
  */
 function parseJsonContent(content: string) {
   const parsed = jsonFromResponse<unknown>(content, "SUGGESTIONS");
-  if (!Array.isArray(parsed)) {
-    throw new Error("AiAssist returned a non-array suggestion payload");
+
+  if (Array.isArray(parsed)) return parsed;
+
+  /*
+   * A TIGHTER PROMPT IS NOT A GUARANTEE, so the parser gives ground too.
+   *
+   * The prompt now shows the array explicitly, and a model will still
+   * sometimes wrap it — `{ "suggestions": [...] }` is the obvious thing to
+   * send when the block is named SUGGESTIONS. Refusing that cost sixty seconds
+   * of real work and showed the operator a 502.
+   *
+   * Unwrapping ONE array-valued property is not guesswork: there is exactly
+   * one array in the payload and exactly one thing this endpoint wants. What
+   * it deliberately does not do is search for a key by name, which would be
+   * guessing at vocabulary rather than reading structure.
+   */
+  if (typeof parsed === "object" && parsed !== null) {
+    const arrays = Object.values(parsed as Record<string, unknown>).filter(
+      (value): value is unknown[] => Array.isArray(value),
+    );
+    if (arrays.length === 1) return arrays[0];
+
+    // A single suggestion sent unwrapped. It has the shape of one item, so it
+    // is one item — the operator asked for options and got fewer, which is a
+    // thin answer rather than a failed one.
+    if ("text" in (parsed as Record<string, unknown>)) return [parsed];
   }
-  return parsed;
+
+  throw new Error(
+    `AiAssist returned a ${
+      Array.isArray(parsed) ? "array" : typeof parsed
+    } where a suggestion array was expected`,
+  );
 }
 
 /**
@@ -193,7 +222,7 @@ function briefSystemPrompt(platform: string): string {
     "",
     "Rules that matter:",
     "- The CONVERSATION block is the only thing the operator reads. Keep it to a sentence or two, like speech.",
-    "- The tag must name exactly the fields the JSON sets. If they disagree, the call is reported as a mistake rather than applied.",
+    `- The tag must name exactly the fields the JSON sets, using these names: ${Object.keys(SET_BRIEF_TOOL.parameters).join("||")}. If the tag and the JSON disagree, the operator is told.`,
     "- Include ONLY the fields they actually told you. Leaving one out keeps whatever the form already has, which is always safer than a guess.",
     "- If you have nothing to fill in yet — you are only asking a question — send the CONVERSATION block alone. That is a complete turn.",
     "- Never invent facts. If you do not know the date, the price, or a stylist's name, ask.",
@@ -305,11 +334,27 @@ function parseBriefContent(content: string): {
   }
 
   // The tag's declaration, checked against what actually arrived.
+  //
+  // NORMALISED PAST PUNCTUATION, not merely lowercased. A model writes
+  // `SOURCE_TEXT` in a tag and `sourceText` in JSON — both entirely
+  // reasonable, and the same field. Comparing on case alone reported them as a
+  // disagreement, so the one field that HAD changed came with a warning saying
+  // it had not. A false alarm about the machinery is worse than no alarm: it
+  // teaches the operator to ignore the real ones.
+  const canonical = (name: string) =>
+    name.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+
   const declared = call.arg
     .split("||")
-    .map((name) => name.trim().toLowerCase())
+    .map(canonical)
     .filter((name) => name !== "");
-  const applied = Object.keys(proposal).map((f) => f.toLowerCase());
+  const applied = Object.keys(proposal).map(canonical);
+  /** Canonical name -> the field as the schema spells it, for the message. */
+  const spelling = new Map(
+    Object.keys(SET_BRIEF_TOOL.parameters).map((f) => [canonical(f), f]),
+  );
+  const readable = (name: string) => spelling.get(name) ?? name;
+
   const promisedButAbsent = declared.filter((name) => !applied.includes(name));
   const sentButUndeclared =
     declared.length > 0
@@ -320,10 +365,10 @@ function parseBriefContent(content: string): {
     promisedButAbsent.length > 0 || sentButUndeclared.length > 0
       ? [
           promisedButAbsent.length > 0
-            ? `named but not sent: ${promisedButAbsent.join(", ")}`
+            ? `named but not sent: ${promisedButAbsent.map(readable).join(", ")}`
             : "",
           sentButUndeclared.length > 0
-            ? `sent but not named: ${sentButUndeclared.join(", ")}`
+            ? `sent but not named: ${sentButUndeclared.map(readable).join(", ")}`
             : "",
         ]
           .filter((part) => part !== "")
@@ -396,17 +441,40 @@ router.post("/ai/suggest", async (req, res) => {
   const provider = providerFor(input.provider);
   const count = input.numberOfSuggestions ?? 3;
   const maxCharacters = input.maxCharacters ?? 1300;
+  /*
+   * Tightened, and the shape of the tightening is the point.
+   *
+   * The previous version was seven rules `.join(" ")` into one run-on
+   * paragraph, with the required shape described in words: "the JSON array".
+   * A 32B model read that and sent `{ "suggestions": [...] }` — a completely
+   * reasonable reading, since the block is called SUGGESTIONS — and the route
+   * threw "non-array suggestion payload" after sixty seconds of work.
+   *
+   * So: newlines instead of one paragraph, the constraint stated as ARRAY vs
+   * OBJECT rather than implied, and a WORKED EXAMPLE. An example is worth more
+   * than any amount of description — it is the difference the `imagine` runs
+   * measured, and it costs a dozen tokens.
+   */
   const systemPrompt = [
-    "You are a senior social media editor.",
-    "Put the answer in a sentinel block, exactly: <<<SUGGESTIONS>>> then the JSON array on its own lines, then <<<END>>>.",
-    "Everything outside that block is ignored, so a sentence of your own before it is harmless.",
-    'Each item must have exactly: "text", "rationale", and "characterCount".',
-    `Create ${count} distinct suggestions for ${input.platform}.`,
-    `Keep each text under ${maxCharacters} characters.`,
+    "You are a senior social media editor writing posts for a real business.",
+    "",
+    `Write ${count} distinct options for ${input.platform}. Each under ${maxCharacters} characters.`,
     input.includeHashtags === false
-      ? "Do not add hashtags."
-      : "Use hashtags only when they add real discovery value.",
-  ].join(" ");
+      ? "No hashtags."
+      : "Hashtags only where they genuinely aid discovery.",
+    "Work only from the operator's material. Never invent a fact, a date, a price or a name.",
+    "",
+    "Answer with a sentinel block containing a JSON ARRAY — square brackets at the top level, NOT an object wrapping one:",
+    "",
+    `${OPEN}SUGGESTIONS${CLOSE}`,
+    "[",
+    '  { "text": "the post itself", "rationale": "why this angle", "characterCount": 21 },',
+    '  { "text": "a different angle", "rationale": "why this one differs", "characterCount": 17 }',
+    "]",
+    END,
+    "",
+    "Anything outside the block is ignored, so think out loud beforehand if it helps.",
+  ].join("\n");
 
   try {
     const response = await fetch(`${AIASSIST_BASE_URL}/v1/chat/completions`, {
