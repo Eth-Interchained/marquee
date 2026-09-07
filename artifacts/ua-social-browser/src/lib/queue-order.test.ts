@@ -211,3 +211,32 @@ describe('the order is total, so the list never shuffles on its own', () => {
     assert.ok(queueKey(noTime).at, 'it falls back to a real timestamp');
   });
 });
+
+describe('a new draft arrives scheduled, not immediate', () => {
+  test('a draft with a time is not "post immediately"', () => {
+    // The composer now writes an hour-from-now rather than null. The card's
+    // checkbox reads `scheduledFor === null`, so a time is what makes the
+    // safer default the visible one.
+    const withTime = draft('draft', { scheduledFor: '2026-09-07T17:00:00.000Z' });
+    assert.notEqual(withTime.scheduledFor, null);
+  });
+
+  test('arriving scheduled does not change where it sits in the queue', () => {
+    // Unapproved drafts are ranked and clocked by `createdAt`, so carrying a
+    // time does not push a fresh draft away from the other things needing
+    // review — it still lines up by age with everything else waiting.
+    const immediate = draft('draft', {
+      createdAt: '2026-09-01T10:00:00.000Z',
+      scheduledFor: null,
+    });
+    const scheduled = draft('draft', {
+      createdAt: '2026-09-02T10:00:00.000Z',
+      scheduledFor: '2026-12-01T10:00:00.000Z',
+    });
+
+    assert.deepEqual(ids(orderForQueue([scheduled, immediate])), [
+      immediate.id,
+      scheduled.id,
+    ]);
+  });
+});
