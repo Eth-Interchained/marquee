@@ -51,8 +51,8 @@ import {
   fromLocalInputValue,
   logActivity,
   toLocalInputValue,
-} from "@/lib/workspace";
-import type { Platform } from "@/types";
+} from '@/lib/workspace';
+import type { Platform } from '@/types';
 
 /**
  * Reveal timing. These must match `.ua-revealing` in `index.css`.
