@@ -175,3 +175,27 @@ describe('readiness matches the Generate button', () => {
     assert.equal(readyToGenerate({ ...FORM, sourceText: 'abc' }), true);
   });
 });
+
+describe('a proposed value the form has no preset for', () => {
+  test('an off-list tone is still applied', () => {
+    // The failure the owner hit: the model answered "Warm and inviting", which
+    // is not one of the six presets. It reached state and reached the request;
+    // only the Select could not display it, so the app looked as though the
+    // tone had been dropped.
+    const { next, changes, refused } = applyBrief(FORM, {
+      tone: 'Warm and inviting',
+    });
+
+    assert.equal(next.tone, 'Warm and inviting');
+    assert.deepEqual(refused, [], 'tone is free text, not an enum');
+    assert.equal(changes[0].field, 'tone');
+  });
+
+  test('tone is deliberately NOT validated against a preset list', () => {
+    // Refusing an unlisted tone would throw away the most useful thing prompt
+    // mode does: hearing "warm but not hype" and putting exactly that in the
+    // brief. The presets are suggestions; the field is free text.
+    const odd = 'Dry, a little wry, never salesy';
+    assert.equal(applyBrief(FORM, { tone: odd }).next.tone, odd);
+  });
+});
