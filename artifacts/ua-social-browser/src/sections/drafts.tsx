@@ -44,6 +44,7 @@ import {
   uploadMedia,
 } from '@/lib/media';
 import { draggingFiles, leftTheCard } from '@/lib/drop';
+import { orderForQueue } from '@/lib/queue-order';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
@@ -154,8 +155,19 @@ export function Drafts({
   // name: an approval recorded under a placeholder is a false statement about
   // who agreed to publish, and the record cannot be corrected afterwards.
   const operator = approverName(state.settings.operatorName);
-  const drafts = draftsForWorkspace(state, workspace.id).filter((draft) =>
-    matchesFilter(draft, filter),
+  /**
+   * The queue's own order, not the store's.
+   *
+   * `draftsForWorkspace` sorts by `updatedAt` for every other caller, which is
+   * fine for a log and wrong for a work queue: `patchDraft` stamps `updatedAt`
+   * on every change, so touching a card made it the newest thing and threw it
+   * to position 0 — the "bounced to the top" the owner reported. See
+   * `lib/queue-order.ts` for what replaces it and why.
+   */
+  const drafts = orderForQueue(
+    draftsForWorkspace(state, workspace.id).filter((draft) =>
+      matchesFilter(draft, filter),
+    ),
   );
   const awaitingReview = drafts.some(
     (draft) => draft.status === 'draft' || draft.status === 'failed',
