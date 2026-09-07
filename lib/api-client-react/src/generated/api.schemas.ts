@@ -18,6 +18,119 @@ export interface AiModelList {
   models: AiModel[];
 }
 
+export type AiBriefTurnRole = typeof AiBriefTurnRole[keyof typeof AiBriefTurnRole];
+
+
+export const AiBriefTurnRole = {
+  operator: 'operator',
+  model: 'model',
+} as const;
+
+export interface AiBriefTurn {
+  role: AiBriefTurnRole;
+  /**
+     * @minLength 1
+     * @maxLength 4000
+     */
+  content: string;
+}
+
+/**
+ * The workspace's network, as the starting assumption.
+ */
+export type AiBriefInputPlatform = typeof AiBriefInputPlatform[keyof typeof AiBriefInputPlatform];
+
+
+export const AiBriefInputPlatform = {
+  x: 'x',
+  instagram: 'instagram',
+  facebook: 'facebook',
+  threads: 'threads',
+  linkedin: 'linkedin',
+  bluesky: 'bluesky',
+  mastodon: 'mastodon',
+  reddit: 'reddit',
+  tiktok: 'tiktok',
+  youtube: 'youtube',
+  pinterest: 'pinterest',
+  tumblr: 'tumblr',
+} as const;
+
+export interface AiBriefInput {
+  /** The workspace's network, as the starting assumption. */
+  platform: AiBriefInputPlatform;
+  /**
+     * @minItems 1
+     * @maxItems 20
+     */
+  conversation: AiBriefTurn[];
+  model?: string;
+}
+
+export type AiBriefProposalPlatform = typeof AiBriefProposalPlatform[keyof typeof AiBriefProposalPlatform];
+
+
+export const AiBriefProposalPlatform = {
+  x: 'x',
+  instagram: 'instagram',
+  facebook: 'facebook',
+  threads: 'threads',
+  linkedin: 'linkedin',
+  bluesky: 'bluesky',
+  mastodon: 'mastodon',
+  reddit: 'reddit',
+  tiktok: 'tiktok',
+  youtube: 'youtube',
+  pinterest: 'pinterest',
+  tumblr: 'tumblr',
+} as const;
+
+export type AiBriefProposalTask = typeof AiBriefProposalTask[keyof typeof AiBriefProposalTask];
+
+
+export const AiBriefProposalTask = {
+  suggest: 'suggest',
+  rewrite: 'rewrite',
+  shorten: 'shorten',
+  expand: 'expand',
+  variants: 'variants',
+  hashtags: 'hashtags',
+} as const;
+
+/**
+ * Every field is optional on purpose. A first message rarely settles all of them, and inventing an audience the operator never mentioned is worse than leaving the field alone — the form keeps its current value and the operator is not misled about what they said.
+ */
+export interface AiBriefProposal {
+  platform?: AiBriefProposalPlatform;
+  task?: AiBriefProposalTask;
+  /** @maxLength 100 */
+  tone?: string;
+  /** @maxLength 200 */
+  audience?: string;
+  /** @maxLength 12000 */
+  sourceText?: string;
+  /**
+     * @minimum 1
+     * @maximum 8
+     */
+  numberOfSuggestions?: number;
+  includeHashtags?: boolean;
+}
+
+export interface AiUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface AiBriefResult {
+  /** What to show the operator in the conversation. */
+  reply: string;
+  proposal: AiBriefProposal;
+  /** Fields the model could not responsibly fill from what was said. The client shows these as still needing the operator, rather than hiding a gap behind a plausible guess. */
+  missing?: string[];
+  usage: AiUsage;
+}
+
 export type AiSuggestionInputPlatform = typeof AiSuggestionInputPlatform[keyof typeof AiSuggestionInputPlatform];
 
 
@@ -84,11 +197,6 @@ export interface AiSuggestion {
   text: string;
   rationale: string;
   characterCount: number;
-}
-
-export interface AiUsage {
-  inputTokens: number;
-  outputTokens: number;
 }
 
 export type AiSuggestionResultProvider = typeof AiSuggestionResultProvider[keyof typeof AiSuggestionResultProvider];

@@ -250,6 +250,34 @@ paths:
           description: Invalid request
         "502":
           description: AiAssist request failed
+  /ai/brief:
+    post:
+      operationId: createAiBrief
+      tags: [ai]
+      summary: Turn a conversation into a proposed composer brief
+      description: >-
+        Prompt mode. The operator describes what they want in plain language and
+        the model proposes the composer's settings — platform, task, tone,
+        audience, notes, how many options. It PROPOSES only: the answer is
+        applied to the form the operator can see and edit, and generating still
+        takes their click. Nothing here reaches a network.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiBriefInput"
+      responses:
+        "200":
+          description: A proposed brief, plus the model's reply to the operator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiBriefResult"
+        "400":
+          description: Invalid request
+        "502":
+          description: AiAssist request failed
 components:
   schemas:
     HealthStatus:
@@ -275,6 +303,81 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AiModel"
+    AiBriefTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [operator, model]
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+    AiBriefInput:
+      type: object
+      required: [platform, conversation]
+      properties:
+        platform:
+          type: string
+          description: The workspace's network, as the starting assumption.
+          enum: [x, instagram, facebook, threads, linkedin, bluesky, mastodon, reddit, tiktok, youtube, pinterest, tumblr]
+        conversation:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/AiBriefTurn"
+        model:
+          type: string
+    AiBriefProposal:
+      type: object
+      description: >-
+        Every field is optional on purpose. A first message rarely settles all
+        of them, and inventing an audience the operator never mentioned is
+        worse than leaving the field alone — the form keeps its current value
+        and the operator is not misled about what they said.
+      properties:
+        platform:
+          type: string
+          enum: [x, instagram, facebook, threads, linkedin, bluesky, mastodon, reddit, tiktok, youtube, pinterest, tumblr]
+        task:
+          type: string
+          enum: [suggest, rewrite, shorten, expand, variants, hashtags]
+        tone:
+          type: string
+          maxLength: 100
+        audience:
+          type: string
+          maxLength: 200
+        sourceText:
+          type: string
+          maxLength: 12000
+        numberOfSuggestions:
+          type: number
+          minimum: 1
+          maximum: 8
+        includeHashtags:
+          type: boolean
+    AiBriefResult:
+      type: object
+      required: [reply, proposal, usage]
+      properties:
+        reply:
+          type: string
+          description: What to show the operator in the conversation.
+        proposal:
+          $ref: "#/components/schemas/AiBriefProposal"
+        missing:
+          type: array
+          description: >-
+            Fields the model could not responsibly fill from what was said. The
+            client shows these as still needing the operator, rather than
+            hiding a gap behind a plausible guess.
+          items:
+            type: string
+        usage:
+          $ref: "#/components/schemas/AiUsage"
     AiSuggestionInput:
       type: object
       required: [platform, task, tone, audience, sourceText]

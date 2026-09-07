@@ -1,5 +1,7 @@
 import { Router, type IRouter } from "express";
 import {
+  CreateAiBriefBody,
+  CreateAiBriefResponse,
   CreateAiSuggestionBody,
   CreateAiSuggestionResponse,
   ListAiModelsResponse,
@@ -53,6 +55,79 @@ function parseJsonContent(content: string) {
     throw new Error("AiAssist returned a non-array suggestion payload");
   }
   return parsed;
+}
+
+/**
+ * The enums the model is allowed to answer with.
+ *
+ * Spelled out for the prompt rather than described, because "a platform" gets
+ * answered with "Twitter" and the schema only accepts "x". Kept beside the
+ * route so the two cannot drift apart silently — the zod validator refuses a
+ * bad value either way, but a refusal the operator sees as a 502 is a worse
+ * outcome than a prompt that never produced one.
+ */
+const PLATFORM_VALUES = [
+  "x", "instagram", "facebook", "threads", "linkedin", "bluesky",
+  "mastodon", "reddit", "tiktok", "youtube", "pinterest", "tumblr",
+] as const;
+
+const TASK_VALUES = [
+  "suggest", "rewrite", "shorten", "expand", "variants", "hashtags",
+] as const;
+
+/**
+ * Reads the brief object out of a model reply.
+ *
+ * Same fence-stripping as `parseJsonContent`, but this one wants an OBJECT and
+ * that difference matters: a model that answers with a bare array here would
+ * otherwise pass a truthiness check and produce a brief with no fields at all,
+ * which looks like "the model had nothing to say" rather than a parse failure.
+ *
+ * Unknown keys are dropped rather than passed through. The proposal is applied
+ * straight onto form state, so anything not in the schema has no business
+ * arriving there.
+ */
+function parseBriefContent(content: string): {
+  reply: string;
+  proposal: Record<string, unknown>;
+  missing: string[];
+} {
+  const normalized = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "");
+  const parsed: unknown = JSON.parse(normalized);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("AiAssist returned a non-object brief payload");
+  }
+
+  const raw = parsed as Record<string, unknown>;
+  const incoming = (raw.proposal ?? {}) as Record<string, unknown>;
+  const allowed = [
+    "platform", "task", "tone", "audience", "sourceText",
+    "numberOfSuggestions", "includeHashtags",
+  ];
+
+  const proposal: Record<string, unknown> = {};
+  for (const field of allowed) {
+    const value = incoming[field];
+    // An empty string is not an answer. Letting one through would blank a
+    // field the operator had already filled in, which reads as the app losing
+    // their work rather than the model declining to guess.
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    proposal[field] = value;
+  }
+
+  return {
+    reply: typeof raw.reply === "string" && raw.reply.trim() !== ""
+      ? raw.reply
+      : "Filled in what I could from that.",
+    proposal,
+    missing: Array.isArray(raw.missing)
+      ? raw.missing.filter((m): m is string => typeof m === "string")
+      : [],
+  };
 }
 
 router.get("/ai/models", async (req, res) => {
@@ -163,6 +238,102 @@ router.post("/ai/suggest", async (req, res) => {
   } catch (error) {
     req.log.error({ err: error }, "AI suggestion parsing or request failed");
     return res.status(502).json({ error: "AI suggestions are temporarily unavailable" });
+  }
+});
+
+/**
+ * Prompt mode: a conversation in, a proposed brief out.
+ *
+ * The composer's form asks six questions the operator has to answer before the
+ * model will write anything. That is the right shape when they know what they
+ * want and a poor one when they are still deciding, so this lets them describe
+ * it in a sentence and have the fields filled in.
+ *
+ * IT PROPOSES, IT DOES NOT ACT. The answer is applied to the form the operator
+ * can see and edit, and generating still takes their click. Nothing on this
+ * path reaches a network, and the review tick on every candidate is still
+ * required before a draft exists — prompt mode is a faster way to fill in a
+ * brief, not a second route to publishing.
+ *
+ * EVERY PROPOSED FIELD IS OPTIONAL, on purpose. A first message rarely settles
+ * all six, and inventing an audience the operator never mentioned is worse
+ * than leaving the field alone: the form keeps its current value, `missing`
+ * names the gap, and nobody is misled about what they said.
+ */
+router.post("/ai/brief", async (req, res) => {
+  const parsed = CreateAiBriefBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid AI brief request" });
+  }
+
+  const input = parsed.data;
+  const model = input.model || DEFAULT_MODEL;
+
+  const systemPrompt = [
+    "You help a social media operator fill in a post composer.",
+    "Return ONLY a valid JSON object, with no markdown fences.",
+    'Shape: { "reply": string, "proposal": object, "missing": string[] }.',
+    '"reply" is one or two sentences to the operator: what you understood, and the single most useful question if something important is still unclear.',
+    '"proposal" may contain any of: platform, task, tone, audience, sourceText, numberOfSuggestions, includeHashtags.',
+    "OMIT any field the operator has not actually told you. Do not guess an audience, a tone, or a platform from nothing — an omitted field keeps whatever the form already has, which is the safer outcome.",
+    '"missing" lists the names of fields you deliberately left out because they still need the operator.',
+    `platform must be one of: ${PLATFORM_VALUES.join(", ")}.`,
+    `task must be one of: ${TASK_VALUES.join(", ")}.`,
+    "sourceText is the operator's raw material — the notes the post gets written from. Put the facts they gave you there, and never invent facts they did not state.",
+    "numberOfSuggestions is between 1 and 8.",
+    `The workspace's network is ${input.platform}; assume that unless the operator says otherwise.`,
+  ].join(" ");
+
+  try {
+    const response = await fetch(`${AIASSIST_BASE_URL}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${getApiKey()}`,
+        "Content-Type": "application/json",
+        "X-AiAssist-Provider": AIASSIST_PROVIDER,
+      },
+      body: JSON.stringify({
+        model,
+        // Lower than /ai/suggest: this is an extraction task, and a creative
+        // temperature here shows up as invented audiences.
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...input.conversation.map((turn) => ({
+            role: turn.role === "operator" ? "user" : "assistant",
+            content: turn.content,
+          })),
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      req.log.error(
+        { status: response.status, response: errorText.slice(0, 300) },
+        "AiAssist brief request failed",
+      );
+      return res.status(502).json({ error: "AiAssist could not read that" });
+    }
+
+    const payload = (await response.json()) as ChatCompletionResponse;
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("AiAssist returned no message content");
+    }
+
+    const result = CreateAiBriefResponse.parse({
+      ...parseBriefContent(content),
+      usage: {
+        inputTokens: payload.usage?.prompt_tokens ?? 0,
+        outputTokens: payload.usage?.completion_tokens ?? 0,
+      },
+    });
+
+    return res.json(result);
+  } catch (error) {
+    req.log.error({ err: error }, "AI brief parsing or request failed");
+    return res.status(502).json({ error: "Prompt mode is temporarily unavailable" });
   }
 });
 
