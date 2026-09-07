@@ -304,6 +304,27 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   const routedProvider = providerOf(picker, model);
   const excludedNote = describeExcluded(picker);
 
+  /**
+   * The tone presets, plus whatever the tone actually IS.
+   *
+   * `TONES` is a list of suggestions, not the set of legal values: the field is
+   * free text as far as the API is concerned, and prompt mode proposes whatever
+   * the operator described. When the model answered "Warm and inviting" — not
+   * one of the six presets — the Select had no matching item and rendered an
+   * EMPTY trigger. The tone was in state and was sent with the request; the
+   * control simply refused to show it, so the app lied about what was about to
+   * go to the model.
+   *
+   * This is the same defect I had already fixed in the model picker, where an
+   * unlisted model still appears on the trigger, and did not carry across to
+   * the field beside it. A control whose value it cannot display must widen,
+   * not blank.
+   */
+  const toneOptions = useMemo(
+    () => (TONES.includes(tone) ? TONES : [tone, ...TONES]),
+    [tone],
+  );
+
   const limit = PLATFORM_LIMIT[platform];
   const canSubmit = sourceText.trim().length >= 3 && !suggest.isPending;
 
@@ -720,7 +741,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {TONES.map((option) => (
+                  {toneOptions.map((option) => (
                     <SelectItem key={option} value={option}>
                       {option}
                     </SelectItem>
