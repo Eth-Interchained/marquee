@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { jsonFromResponse } from "sentinel-blocks";
 import {
   CreateAiBriefBody,
   CreateAiBriefResponse,
@@ -66,12 +67,17 @@ function getApiKey() {
   throw new Error("AIASSIST_API_KEY is not configured");
 }
 
+/**
+ * Reads the suggestions out of a completion.
+ *
+ * Was: strip fences, `JSON.parse`, hope. That is hand-rolled extraction and it
+ * breaks the moment a model prefaces its answer with a sentence — which they
+ * do. `sentinel-blocks` walks the whole ladder instead: the `<<<SUGGESTIONS>>>`
+ * block, then a plain parse, then a light repair, then a balanced slice. It
+ * never fabricates; if nothing parses it throws and the caller decides.
+ */
 function parseJsonContent(content: string) {
-  const normalized = content
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "");
-  const parsed: unknown = JSON.parse(normalized);
+  const parsed = jsonFromResponse<unknown>(content, "SUGGESTIONS");
   if (!Array.isArray(parsed)) {
     throw new Error("AiAssist returned a non-array suggestion payload");
   }
@@ -113,11 +119,7 @@ function parseBriefContent(content: string): {
   proposal: Record<string, unknown>;
   missing: string[];
 } {
-  const normalized = content
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "");
-  const parsed: unknown = JSON.parse(normalized);
+  const parsed = jsonFromResponse<unknown>(content, "BRIEF");
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("AiAssist returned a non-object brief payload");
   }
@@ -209,7 +211,8 @@ router.post("/ai/suggest", async (req, res) => {
   const maxCharacters = input.maxCharacters ?? 1300;
   const systemPrompt = [
     "You are a senior social media editor.",
-    "Return ONLY a valid JSON array, with no markdown fences.",
+    "Put the answer in a sentinel block, exactly: <<<SUGGESTIONS>>> then the JSON array on its own lines, then <<<END>>>.",
+    "Everything outside that block is ignored, so a sentence of your own before it is harmless.",
     'Each item must have exactly: "text", "rationale", and "characterCount".',
     `Create ${count} distinct suggestions for ${input.platform}.`,
     `Keep each text under ${maxCharacters} characters.`,
@@ -312,7 +315,8 @@ router.post("/ai/brief", async (req, res) => {
 
   const systemPrompt = [
     "You help a social media operator fill in a post composer.",
-    "Return ONLY a valid JSON object, with no markdown fences.",
+    "Put the answer in a sentinel block, exactly: <<<BRIEF>>> then the JSON object on its own lines, then <<<END>>>.",
+    "Everything outside that block is ignored, so talking to the operator before it is fine — but inside the block there must be JSON and nothing else.",
     'Shape: { "reply": string, "proposal": object, "missing": string[] }.',
     '"reply" is one or two sentences to the operator: what you understood, and the single most useful question if something important is still unclear.',
     '"proposal" may contain any of: platform, task, tone, audience, sourceText, numberOfSuggestions, includeHashtags.',

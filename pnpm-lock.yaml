@@ -118,6 +118,9 @@ importers:
       pino-http:
         specifier: ^10.5.0
         version: 10.5.0
+      sentinel-blocks:
+        specifier: ^1.0.2
+        version: 1.0.2
     devDependencies:
       '@types/cookie-parser':
         specifier: ^1.4.10
@@ -3200,6 +3203,10 @@ packages:
     resolution: {integrity: sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==}
     engines: {node: '>= 18'}
 
+  sentinel-blocks@1.0.2:
+    resolution: {integrity: sha512-etiXcqKc0vATYKwUHdwU2twd7MvDkrSObl1pC5vexs+ASDjw3nMTQkSOYN+pVr7soppcDZpOVc1tbR2T/jWq1g==}
+    engines: {node: '>=18'}
+
   serve-static@2.2.1:
     resolution: {integrity: sha512-xRXBn0pPqQTVQiC8wyQrKs2MOlX24zQ0POGaj0kultvoOCstBQM5yvOhAVSUwOMjQtTvsPWoNCHfPGwaaQJhTw==}
     engines: {node: '>= 18'}
@@ -6034,6 +6041,8 @@ snapshots:
       statuses: 2.0.2
     transitivePeerDependencies:
       - supports-color
+
+  sentinel-blocks@1.0.2: {}
 
   serve-static@2.2.1:
     dependencies:
