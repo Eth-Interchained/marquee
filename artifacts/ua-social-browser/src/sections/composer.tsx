@@ -824,7 +824,9 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                       </div>
                     ))}
                     {brief.isPending ? (
-                      <div className="ua-ghost-bar h-8 w-3/5" />
+                      // Working, not absent — the same prism the composer runs
+                      // while it writes, sized like the line that is coming.
+                      <div className="ua-thinking h-9 w-3/5" data-testid="prompt-thinking" />
                     ) : null}
                   </div>
                 ) : null}
