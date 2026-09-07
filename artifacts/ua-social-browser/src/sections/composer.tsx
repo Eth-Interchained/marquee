@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -9,39 +9,40 @@ import {
   Sparkles,
   Trash2,
   Wand2,
-} from 'lucide-react';
+} from "lucide-react";
 import {
   useCreateAiSuggestion,
   useListAiModels,
   type AiSuggestion,
   type AiSuggestionInputPlatform,
   type AiSuggestionInputTask,
-} from '@workspace/api-client-react';
+} from "@workspace/api-client-react";
 
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
-import { Switch } from '@/components/ui/switch';
-import { Textarea } from '@/components/ui/textarea';
-import { useToast } from '@/hooks/use-toast';
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
 import {
   appendCandidates,
   pruneReviewed,
   replaceCandidates,
   withoutCandidate,
   type Candidate,
-} from '@/lib/candidates';
-import { cn } from '@/lib/utils';
-import { SectionShell, type SectionProps } from '@/sections/section-shell';
+} from "@/lib/candidates";
+import { describeRestored, readPool, writePool } from "@/lib/composer-pool";
+import { cn } from "@/lib/utils";
+import { SectionShell, type SectionProps } from "@/sections/section-shell";
 import {
   PLATFORMS,
   PLATFORM_LABEL,
@@ -94,41 +95,52 @@ function GhostSuggestion() {
 const REVEAL_STAGGER_MS = 70;
 const REVEAL_SWEEP_MS = 620;
 
-const TASKS: Array<{ id: AiSuggestionInputTask; label: string; hint: string }> = [
-  { id: 'suggest', label: 'Suggest', hint: 'Draft new options from your notes' },
-  { id: 'rewrite', label: 'Rewrite', hint: 'Keep the point, change the delivery' },
-  { id: 'shorten', label: 'Shorten', hint: 'Tighten without losing meaning' },
-  { id: 'expand', label: 'Expand', hint: 'Add depth and supporting detail' },
-  { id: 'variants', label: 'Variants', hint: 'Same idea, different angles' },
-  { id: 'hashtags', label: 'Hashtags', hint: 'Discovery tags worth using' },
-];
+const TASKS: Array<{ id: AiSuggestionInputTask; label: string; hint: string }> =
+  [
+    {
+      id: "suggest",
+      label: "Suggest",
+      hint: "Draft new options from your notes",
+    },
+    {
+      id: "rewrite",
+      label: "Rewrite",
+      hint: "Keep the point, change the delivery",
+    },
+    { id: "shorten", label: "Shorten", hint: "Tighten without losing meaning" },
+    { id: "expand", label: "Expand", hint: "Add depth and supporting detail" },
+    { id: "variants", label: "Variants", hint: "Same idea, different angles" },
+    { id: "hashtags", label: "Hashtags", hint: "Discovery tags worth using" },
+  ];
 
 const TONES = [
-  'Direct and plainspoken',
-  'Warm and conversational',
-  'Analytical',
-  'Optimistic',
-  'Contrarian',
-  'Technical',
+  "Direct and plainspoken",
+  "Warm and conversational",
+  "Analytical",
+  "Optimistic",
+  "Contrarian",
+  "Technical",
 ];
 
 export function Composer({ state, updateState, workspace }: SectionProps) {
   const { toast } = useToast();
 
   const [platform, setPlatform] = useState<Platform>(workspace.platform);
-  const [task, setTask] = useState<AiSuggestionInputTask>('suggest');
+  const [task, setTask] = useState<AiSuggestionInputTask>("suggest");
   const [tone, setTone] = useState(TONES[0]);
   const [audience, setAudience] = useState(
-    'Founders and product leaders evaluating AI tooling',
+    "Founders and product leaders evaluating AI tooling",
   );
-  const [sourceText, setSourceText] = useState('');
+  const [sourceText, setSourceText] = useState("");
   const [model, setModel] = useState(state.settings.model);
   const [count, setCount] = useState(3);
   const [includeHashtags, setIncludeHashtags] = useState(false);
   // A working pool, not the result of one request: generating more adds to it
   // and judging a card removes that card. Keyed by id throughout — see
   // `lib/candidates.ts` for why an index key is unsafe here.
-  const [suggestions, setSuggestions] = useState<Array<Candidate<AiSuggestion>>>([]);
+  const [suggestions, setSuggestions] = useState<
+    Array<Candidate<AiSuggestion>>
+  >([]);
   /**
    * Which end of the pool the pending batch will land on.
    *
@@ -136,7 +148,9 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
    * options for "keep going", in their place for a fresh generation — so the
    * list does not reshuffle when the text arrives.
    */
-  const [pendingMode, setPendingMode] = useState<'replace' | 'more' | null>(null);
+  const [pendingMode, setPendingMode] = useState<"replace" | "more" | null>(
+    null,
+  );
   /**
    * id -> position in the arriving batch, driving the reveal stagger.
    *
@@ -154,6 +168,63 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
 
   const modelsQuery = useListAiModels();
   const suggest = useCreateAiSuggestion();
+
+  /**
+   * Options survive a reload; the review ticks do not.
+   *
+   * A crash used to take the whole pool with it — see `lib/composer-pool.ts`.
+   * This restores the text and deliberately leaves `reviewed` empty, so every
+   * recovered card has to be read and ticked again before it can become a
+   * draft. The toast says so, because silently handing back cards that look
+   * reviewed would be the actual hazard.
+   */
+  const restoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    const context = `${workspace.id}:${platform}`;
+    if (restoredFor.current === context) return;
+    restoredFor.current = context;
+
+    const outcome = readPool<AiSuggestion>({
+      storage: window.localStorage,
+      workspaceId: workspace.id,
+      platform,
+      now: Date.now(),
+    });
+
+    if (!outcome.restored) {
+      // Switching context must not leave the previous pool on screen.
+      setSuggestions([]);
+      setReviewed({});
+      nextOrdinal.current = 1;
+      return;
+    }
+
+    setSuggestions(outcome.candidates);
+    setReviewed({});
+    nextOrdinal.current = outcome.nextOrdinal;
+    toast({
+      title: 'Recovered your options',
+      description: describeRestored(outcome.candidates.length),
+    });
+  }, [workspace.id, platform, toast]);
+
+  /**
+   * Mirrors the pool after every change.
+   *
+   * This is also what "delete on interaction" means here: judging a card
+   * removes it from the pool, so the next write no longer contains it, and an
+   * emptied pool clears the key outright.
+   */
+  useEffect(() => {
+    writePool({
+      storage: window.localStorage,
+      workspaceId: workspace.id,
+      platform,
+      candidates: suggestions,
+      nextOrdinal: nextOrdinal.current,
+      now: Date.now(),
+    });
+  }, [suggestions, workspace.id, platform]);
 
   useEffect(
     () => () => {
@@ -183,7 +254,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
    * "More" appends, so options accumulate while you work through them; the
    * plain generate replaces, for when the brief itself has changed.
    */
-  function handleGenerate(mode: 'replace' | 'more' = 'replace') {
+  function handleGenerate(mode: "replace" | "more" = "replace") {
     if (!canSubmit) return;
     setErrorMessage(null);
     setPendingMode(mode);
@@ -212,7 +283,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           let arrived: string[] = [];
           setSuggestions((current) => {
             const outcome =
-              mode === 'more'
+              mode === "more"
                 ? appendCandidates({
                     existing: current,
                     incoming: result.suggestions,
@@ -255,15 +326,15 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
             revealTimers.current.push(timer);
           }
 
-          if (mode === 'replace') setReviewed({});
+          if (mode === "replace") setReviewed({});
           if (duplicates > 0) {
             toast({
               title:
                 duplicates === 1
-                  ? 'One option repeated what you already had'
+                  ? "One option repeated what you already had"
                   : `${duplicates} options repeated what you already had`,
               description:
-                'They were dropped rather than listed. Change the tone or the notes to push it somewhere new.',
+                "They were dropped rather than listed. Change the tone or the notes to push it somewhere new.",
             });
           }
           updateState((current) => ({
@@ -275,7 +346,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               requests: current.usage.requests + 1,
             },
             activity: logActivity(current, {
-              type: 'ai',
+              type: "ai",
               title: `AI ${task} generated`,
               detail: `${result.suggestions.length} ${PLATFORM_LABEL[platform]} options for ${workspace.name} · ${result.model}`,
             }),
@@ -284,7 +355,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
         onError: () => {
           setPendingMode(null);
           setErrorMessage(
-            'AiAssist could not generate suggestions. The request failed upstream — nothing was saved.',
+            "AiAssist could not generate suggestions. The request failed upstream — nothing was saved.",
           );
         },
       },
@@ -326,10 +397,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   function saveAsDraft(candidate: Candidate<AiSuggestion>) {
     if (!reviewed[candidate.id]) {
       toast({
-        title: 'Review required',
+        title: "Review required",
         description:
-          'Confirm you have read the suggestion before it becomes a draft.',
-        variant: 'destructive',
+          "Confirm you have read the suggestion before it becomes a draft.",
+        variant: "destructive",
       });
       return;
     }
@@ -338,12 +409,12 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
       ...current,
       drafts: [
         {
-          id: createId('draft'),
+          id: createId("draft"),
           workspaceId: workspace.id,
           platform,
           body: candidate.text,
           media: [],
-          status: 'draft',
+          status: "draft",
           /**
            * Scheduled by default, not immediate.
            *
@@ -368,8 +439,8 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
         ...current.drafts,
       ],
       activity: logActivity(current, {
-        type: 'draft',
-        title: 'Draft saved after human review',
+        type: "draft",
+        title: "Draft saved after human review",
         detail: `${PLATFORM_LABEL[platform]} · ${workspace.name}`,
       }),
     }));
@@ -379,8 +450,9 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     dissolve(candidate.id);
 
     toast({
-      title: 'Saved to drafts',
-      description: 'You can edit, schedule, or discard it from the review queue.',
+      title: "Saved to drafts",
+      description:
+        "You can edit, schedule, or discard it from the review queue.",
     });
   }
 
@@ -392,12 +464,12 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   async function copyText(text: string) {
     try {
       await navigator.clipboard.writeText(text);
-      toast({ title: 'Copied to clipboard' });
+      toast({ title: "Copied to clipboard" });
     } catch {
       toast({
-        title: 'Clipboard unavailable',
-        description: 'Select the text manually to copy it.',
-        variant: 'destructive',
+        title: "Clipboard unavailable",
+        description: "Select the text manually to copy it.",
+        variant: "destructive",
       });
     }
   }
@@ -419,7 +491,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                 value={platform}
                 onValueChange={(value) => setPlatform(value as Platform)}
               >
-                <SelectTrigger id="composer-platform" data-testid="select-platform">
+                <SelectTrigger
+                  id="composer-platform"
+                  data-testid="select-platform"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -442,10 +517,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                     title={option.hint}
                     onClick={() => setTask(option.id)}
                     className={cn(
-                      'rounded-md border px-2 py-1.5 text-xs transition-colors hover-elevate',
+                      "rounded-md border px-2 py-1.5 text-xs transition-colors hover-elevate",
                       task === option.id
-                        ? 'border-primary bg-primary/10 font-medium text-foreground'
-                        : 'border-border text-muted-foreground',
+                        ? "border-primary bg-primary/10 font-medium text-foreground"
+                        : "border-border text-muted-foreground",
                     )}
                     data-testid={`task-${option.id}`}
                   >
@@ -503,7 +578,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               </Select>
               <p className="text-xs text-muted-foreground">
                 {modelsQuery.isError
-                  ? 'Model list unavailable — using the configured default.'
+                  ? "Model list unavailable — using the configured default."
                   : `Routed server-side through provider "${state.settings.provider}".`}
               </p>
             </div>
@@ -554,19 +629,19 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               />
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {sourceText.length} / 12000 · target ≤ {limit} chars for{' '}
+                  {sourceText.length} / 12000 · target ≤ {limit} chars for{" "}
                   {PLATFORM_LABEL[platform]}
                 </span>
                 <div className="flex items-center gap-2">
                   {suggestions.length > 0 ? (
                     <Button
                       variant="outline"
-                      onClick={() => handleGenerate('more')}
+                      onClick={() => handleGenerate("more")}
                       disabled={!canSubmit}
                       // Disabled is the guard against a second request; the
                       // glow is so a working control does not read as a dead
                       // one. Only the button that was pressed lights up.
-                      className={cn(pendingMode === 'more' && 'ua-charging')}
+                      className={cn(pendingMode === "more" && "ua-charging")}
                       title="Add another batch without clearing the ones already here"
                       data-testid="button-generate-more"
                     >
@@ -579,9 +654,9 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                     </Button>
                   ) : null}
                   <Button
-                    onClick={() => handleGenerate('replace')}
+                    onClick={() => handleGenerate("replace")}
                     disabled={!canSubmit}
-                    className={cn(pendingMode === 'replace' && 'ua-charging')}
+                    className={cn(pendingMode === "replace" && "ua-charging")}
                     data-testid="button-generate"
                   >
                     {suggest.isPending ? (
@@ -590,10 +665,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                       <Wand2 className="mr-2 h-4 w-4" />
                     )}
                     {suggest.isPending
-                      ? 'Generating'
+                      ? "Generating"
                       : suggestions.length > 0
-                        ? 'Start over'
-                        : 'Generate suggestions'}
+                        ? "Start over"
+                        : "Generate suggestions"}
                   </Button>
                 </div>
               </div>
@@ -615,7 +690,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
             options will be. "Keep going" appends, so they come after the cards
             already on screen — further down, where the new options land.
           */}
-          {pendingMode === 'replace' ? (
+          {pendingMode === "replace" ? (
             <div className="space-y-4" data-testid="generating-ghosts">
               {Array.from({ length: count }, (_, index) => (
                 <GhostSuggestion key={`ghost-${index}`} />
@@ -642,17 +717,17 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                 <Card
                   key={suggestion.id}
                   className={cn(
-                    dissolving[suggestion.id] && 'ua-dissolving',
+                    dissolving[suggestion.id] && "ua-dissolving",
                     // A card being dismissed is never also arriving; the
                     // dissolve wins so a fast accept cannot fight the reveal.
                     !dissolving[suggestion.id] &&
                       revealing[suggestion.id] !== undefined &&
-                      'ua-revealing',
+                      "ua-revealing",
                   )}
                   style={
                     revealing[suggestion.id] !== undefined
                       ? ({
-                          ['--ua-reveal-delay' as string]: `${
+                          ["--ua-reveal-delay" as string]: `${
                             revealing[suggestion.id]! * REVEAL_STAGGER_MS
                           }ms`,
                         } as React.CSSProperties)
@@ -667,10 +742,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                       </span>
                       <span
                         className={cn(
-                          'text-xs tabular-nums',
+                          "text-xs tabular-nums",
                           overLimit
-                            ? 'font-medium text-destructive'
-                            : 'text-muted-foreground',
+                            ? "font-medium text-destructive"
+                            : "text-muted-foreground",
                         )}
                       >
                         {suggestion.characterCount} / {limit}
@@ -729,7 +804,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                         </Button>
                         <Button
                           size="sm"
-                          variant={isReviewed ? 'default' : 'outline'}
+                          variant={isReviewed ? "default" : "outline"}
                           onClick={() => saveAsDraft(suggestion)}
                           data-testid={`button-save-draft-${suggestion.id}`}
                         >
@@ -749,7 +824,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           )}
 
           {/* "Keep going" adds to the pool, so the wait shows up below it. */}
-          {pendingMode === 'more' ? (
+          {pendingMode === "more" ? (
             <div className="space-y-4" data-testid="generating-ghosts-more">
               {Array.from({ length: count }, (_, index) => (
                 <GhostSuggestion key={`ghost-more-${index}`} />
