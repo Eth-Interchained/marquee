@@ -277,6 +277,7 @@ export const CreateAiBriefResponse = zod.object({
   "includeHashtags": zod.boolean().optional()
 }).describe('Every field is optional on purpose. A first message rarely settles all of them, and inventing an audience the operator never mentioned is worse than leaving the field alone — the form keeps its current value and the operator is not misled about what they said.'),
   "missing": zod.array(zod.string()).optional().describe('Fields the model could not responsibly fill from what was said. The client shows these as still needing the operator, rather than hiding a gap behind a plausible guess.'),
+  "mismatch": zod.string().nullish().describe('Set when the tool call\'s tag and its payload disagree about which fields are being filled in — `<<<SET_BRIEF TONE||AUDIENCE>>>` that then sends only `tone`. The tag is a stated intention, so a disagreement is reported to the operator rather than quietly resolved in favour of one side.'),
   "usage": zod.object({
   "inputTokens": zod.number(),
   "outputTokens": zod.number()

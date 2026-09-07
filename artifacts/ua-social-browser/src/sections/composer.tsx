@@ -199,6 +199,14 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   const [prompt, setPrompt] = useState("");
   /** A proposal waiting to be read. Never applied without the operator. */
   const [pendingBrief, setPendingBrief] = useState<AppliedBrief | null>(null);
+  /**
+   * The model's tool call disagreeing with its own tag.
+   *
+   * `<<<SET_BRIEF TONE||AUDIENCE>>>` that then sends only `tone` has done
+   * something worth seeing. The tag is a stated intention, so the operator is
+   * told rather than having one side quietly win.
+   */
+  const [briefMismatch, setBriefMismatch] = useState<string | null>(null);
   const [briefError, setBriefError] = useState<string | null>(null);
 
   const modelsQuery = useListAiModels();
@@ -323,6 +331,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     setPrompt("");
     setBriefError(null);
     setPendingBrief(null);
+    setBriefMismatch(null);
 
     brief.mutate(
       {
@@ -344,6 +353,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           ]);
           const applied = applyBrief(currentForm(), result.proposal ?? {});
           setPendingBrief(applied);
+          setBriefMismatch(result.mismatch ?? null);
         },
         onError: () => {
           setBriefError(
@@ -870,6 +880,17 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                         Nothing in the brief needed changing.
                       </p>
                     )}
+
+                    {briefMismatch ? (
+                      <p
+                        className="text-xs text-chart-4"
+                        data-testid="brief-mismatch"
+                      >
+                        The model named different fields than it sent —{" "}
+                        {briefMismatch}. What is listed above is what actually
+                        arrived.
+                      </p>
+                    ) : null}
 
                     {pendingBrief.refused.length > 0 ? (
                       <div
