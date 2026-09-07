@@ -170,6 +170,25 @@ export interface BrowserState {
     storeAiPrompts: boolean;
     model: string;
     provider: 'pin';
+    /**
+     * How posts leave this app.
+     *
+     * NO SECRETS LIVE HERE. This whole document is downloadable from
+     * `/api/browser/export`, so an access token in it would be a token in the
+     * operator's Downloads folder. Tokens and API keys are read from the
+     * server's environment and never cross into renderer state; these are the
+     * non-secret identifiers that say *which* Page or account to publish to.
+     */
+    publish: {
+      /** The preferred transport. `session` keeps the behaviour that shipped. */
+      mode: 'session' | 'api';
+      /** The Facebook Page to publish as. Its API cannot post to a profile. */
+      metaPageId: string;
+      /** The Instagram professional account id. */
+      instagramUserId: string;
+      /** Threads signs in separately from the rest of Meta. */
+      threadsUserId: string;
+    };
   };
   usage: {
     inputTokens: number;

@@ -132,3 +132,30 @@ test('an entirely absent document does not throw', () => {
   assert.doesNotThrow(() => hydrateState(null));
   assert.deepEqual(hydrateState(null).drafts, []);
 });
+
+test('a document written before publish settings existed gets all of them', () => {
+  // The rule at the top of hydrate.ts, applied to the field that motivated it:
+  // every stored document predates `settings.publish`.
+  const state = hydrateState({ settings: { operatorName: 'Mark Evans' } });
+
+  assert.equal(state.settings.publish.mode, 'session', 'the route that shipped');
+  assert.equal(state.settings.publish.metaPageId, '');
+  assert.equal(state.settings.publish.instagramUserId, '');
+  assert.equal(state.settings.publish.threadsUserId, '');
+});
+
+test('a partially stored publish group keeps its value AND gains the new fields', () => {
+  // The failure this exists for: `settings` is merged one level deep, so a
+  // nested object arrives whole or not at all. A document holding only `mode`
+  // would replace the defaults outright and leave the rest undefined.
+  const state = hydrateState({
+    settings: { publish: { mode: 'api' } },
+  });
+
+  assert.equal(state.settings.publish.mode, 'api', 'the stored choice survives');
+  assert.equal(
+    state.settings.publish.metaPageId,
+    '',
+    'and a field added later is not undefined',
+  );
+});

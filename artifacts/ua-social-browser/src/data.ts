@@ -83,6 +83,14 @@ export const initialState: BrowserState = {
     storeAiPrompts: false,
     model: 'GLM-4-32B',
     provider: 'pin',
+    publish: {
+      // The route that shipped. Switching to `api` is the operator's call, and
+      // defaulting to it would change how existing posts leave without asking.
+      mode: 'session',
+      metaPageId: '',
+      instagramUserId: '',
+      threadsUserId: '',
+    },
   },
   usage: { inputTokens: 0, outputTokens: 0, requests: 0 },
   updatedAt: new Date().toISOString(),

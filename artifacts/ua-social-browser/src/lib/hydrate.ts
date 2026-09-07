@@ -84,7 +84,19 @@ export function hydrateState(raw: unknown): BrowserState {
     accounts: Array.isArray(state.accounts) ? state.accounts : [],
     activity: Array.isArray(state.activity) ? state.activity : [],
     drafts: Array.isArray(state.drafts) ? state.drafts.map(hydrateDraft) : [],
-    settings: { ...initialState.settings, ...(state.settings ?? {}) },
+    settings: {
+      ...initialState.settings,
+      ...(state.settings ?? {}),
+      // `settings` is merged one level deep, so a nested object arrives whole
+      // or not at all. A document written when `publish` held only `mode`
+      // would otherwise replace the defaults entirely and leave the newer
+      // fields undefined — the same failure as `media`, one level lower and
+      // harder to see. Every nested settings group needs its own line here.
+      publish: {
+        ...initialState.settings.publish,
+        ...((state.settings ?? {}).publish ?? {}),
+      },
+    },
     usage: { ...initialState.usage, ...(state.usage ?? {}) },
   };
 }
