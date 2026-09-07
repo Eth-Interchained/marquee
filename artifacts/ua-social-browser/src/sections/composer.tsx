@@ -29,9 +29,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -58,6 +56,7 @@ import {
   describeMissingModel,
   modelsForPurpose,
 } from "@/lib/model-picker";
+import { ModelSelect } from "@/components/app/model-select";
 import { cn } from "@/lib/utils";
 import { SectionShell, type SectionProps } from "@/sections/section-shell";
 import {
@@ -724,32 +723,13 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
 
             <div className="space-y-1.5">
               <Label htmlFor="composer-model">Model</Label>
-              <Select value={model} onValueChange={setModel}>
-                <SelectTrigger id="composer-model" data-testid="select-model">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {/*
-                    The selected model is offered even when the gateway does
-                    not list it, or the Select would render an empty trigger
-                    and the operator could not see what they were set to. The
-                    warning below is what tells them it will not work.
-                  */}
-                  {missingModel ? (
-                    <SelectItem value={model}>{model}</SelectItem>
-                  ) : null}
-                  {picker.groups.map((group) => (
-                    <SelectGroup key={group.label}>
-                      <SelectLabel>{group.label}</SelectLabel>
-                      {group.models.map((option) => (
-                        <SelectItem key={option.id} value={option.id}>
-                          {option.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ModelSelect
+                id="composer-model"
+                value={model}
+                picker={picker}
+                unreachable={missingModel !== null}
+                onChange={setModel}
+              />
               {missingModel ? (
                 <p
                   className="flex items-start gap-1.5 text-xs text-destructive"
