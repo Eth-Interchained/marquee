@@ -5,8 +5,13 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AiModelModality } from './aiModelModality';
 
 export interface AiModel {
   id: string;
   name: string;
+  /** Which gateway provider serves it. Used to group the picker — an account with four providers configured lists dozens of models, and a flat list of dozens is not a menu. */
+  provider?: string;
+  /** What the model is FOR. `audio` models sit in the same catalogue as chat models and picking one for a text post fails in a way the operator cannot anticipate from the menu. Absent on an older gateway, in which case nothing is filtered — hiding models because a field is missing would be worse than listing one that fails. */
+  modality?: AiModelModality;
 }

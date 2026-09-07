@@ -181,7 +181,9 @@ export const HealthCheckResponse = zod.object({
 export const ListAiModelsResponse = zod.object({
   "models": zod.array(zod.object({
   "id": zod.string(),
-  "name": zod.string()
+  "name": zod.string(),
+  "provider": zod.string().optional().describe('Which gateway provider serves it. Used to group the picker — an account with four providers configured lists dozens of models, and a flat list of dozens is not a menu.'),
+  "modality": zod.enum(['chat', 'audio']).optional().describe('What the model is FOR. `audio` models sit in the same catalogue as chat models and picking one for a text post fails in a way the operator cannot anticipate from the menu. Absent on an older gateway, in which case nothing is filtered — hiding models because a field is missing would be worse than listing one that fails.')
 }))
 })
 

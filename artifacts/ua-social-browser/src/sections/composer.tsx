@@ -29,7 +29,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -51,6 +53,11 @@ import {
   type FormState,
 } from "@/lib/brief";
 import { describeRestored, readPool, writePool } from "@/lib/composer-pool";
+import {
+  describeExcluded,
+  describeMissingModel,
+  modelsForPurpose,
+} from "@/lib/model-picker";
 import { cn } from "@/lib/utils";
 import { SectionShell, type SectionProps } from "@/sections/section-shell";
 import {
@@ -265,15 +272,21 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     [],
   );
 
-  const modelOptions = useMemo(() => {
-    const fetched = modelsQuery.data?.models ?? [];
-    const hasConfigured = fetched.some(
-      (option) => option.id === state.settings.model,
-    );
-    return hasConfigured
-      ? fetched
-      : [{ id: state.settings.model, name: state.settings.model }, ...fetched];
-  }, [modelsQuery.data, state.settings.model]);
+  /**
+   * The catalogue as a menu: grouped by provider, speech models left out.
+   *
+   * This replaces a list that prepended the configured model whenever the
+   * gateway did not offer it — which made an unreachable model look available
+   * and was how `GLM-4-32B` sat selected while the endpoint listed seven PIN
+   * ids that could not resolve. An unreachable selection is now SAID, not
+   * papered over. See `lib/model-picker.ts`.
+   */
+  const picker = useMemo(
+    () => modelsForPurpose(modelsQuery.data?.models ?? []),
+    [modelsQuery.data],
+  );
+  const missingModel = describeMissingModel(model, picker);
+  const excludedNote = describeExcluded(picker);
 
   const limit = PLATFORM_LIMIT[platform];
   const canSubmit = sourceText.trim().length >= 3 && !suggest.isPending;
@@ -716,17 +729,41 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {modelOptions.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>
-                      {option.name}
-                    </SelectItem>
+                  {/*
+                    The selected model is offered even when the gateway does
+                    not list it, or the Select would render an empty trigger
+                    and the operator could not see what they were set to. The
+                    warning below is what tells them it will not work.
+                  */}
+                  {missingModel ? (
+                    <SelectItem value={model}>{model}</SelectItem>
+                  ) : null}
+                  {picker.groups.map((group) => (
+                    <SelectGroup key={group.label}>
+                      <SelectLabel>{group.label}</SelectLabel>
+                      {group.models.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
+              {missingModel ? (
+                <p
+                  className="flex items-start gap-1.5 text-xs text-destructive"
+                  data-testid="warning-model-unreachable"
+                >
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{missingModel}</span>
+                </p>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 {modelsQuery.isError
                   ? "Model list unavailable — using the configured default."
                   : `Routed server-side through provider "${state.settings.provider}".`}
+                {excludedNote ? ` ${excludedNote}` : ""}
               </p>
             </div>
 
