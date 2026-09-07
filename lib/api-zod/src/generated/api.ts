@@ -214,6 +214,7 @@ export const CreateAiSuggestionBody = zod.object({
   "audience": zod.string().min(1).max(createAiSuggestionBodyAudienceMax),
   "sourceText": zod.string().min(createAiSuggestionBodySourceTextMin).max(createAiSuggestionBodySourceTextMax),
   "model": zod.string().optional(),
+  "provider": zod.string().optional().describe('Which gateway provider serves the chosen model, from \/ai\/models. Sent as X-AiAssist-Provider so the request reaches the vendor that actually has the model. Omitted when unknown, in which case the gateway infers it from the model id.'),
   "numberOfSuggestions": zod.number().min(1).max(createAiSuggestionBodyNumberOfSuggestionsMax).default(createAiSuggestionBodyNumberOfSuggestionsDefault),
   "maxCharacters": zod.number().min(createAiSuggestionBodyMaxCharactersMin).max(createAiSuggestionBodyMaxCharactersMax).default(createAiSuggestionBodyMaxCharactersDefault),
   "includeHashtags": zod.boolean().default(createAiSuggestionBodyIncludeHashtagsDefault)
@@ -250,7 +251,8 @@ export const CreateAiBriefBody = zod.object({
   "role": zod.enum(['operator', 'model']),
   "content": zod.string().min(1).max(createAiBriefBodyConversationItemContentMax)
 })).min(1).max(createAiBriefBodyConversationMax),
-  "model": zod.string().optional()
+  "model": zod.string().optional(),
+  "provider": zod.string().optional().describe('Which gateway provider serves the chosen model, from \/ai\/models. Sent as X-AiAssist-Provider so the request reaches the vendor that actually has the model. Omitted when unknown, in which case the gateway infers it from the model id.')
 })
 
 export const createAiBriefResponseProposalToneMax = 100;

@@ -27,6 +27,8 @@ export interface AiSuggestionInput {
      */
   sourceText: string;
   model?: string;
+  /** Which gateway provider serves the chosen model, from /ai/models. Sent as X-AiAssist-Provider so the request reaches the vendor that actually has the model. Omitted when unknown, in which case the gateway infers it from the model id. */
+  provider?: string;
   /**
      * @minimum 1
      * @maximum 8

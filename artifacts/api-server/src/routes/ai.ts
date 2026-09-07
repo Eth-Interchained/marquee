@@ -9,7 +9,28 @@ import {
 
 const router: IRouter = Router();
 const AIASSIST_BASE_URL = "https://api.AiAssist.net";
-const AIASSIST_PROVIDER = "pin";
+/**
+ * The provider used when the caller does not name one.
+ *
+ * PIN is the operator's own network and the app's default, but it must NOT be
+ * forced onto every request: this header was hardcoded, so choosing Claude or
+ * GPT in the picker still routed the call at PIN, which serves neither. The
+ * model was selectable and unusable at the same time.
+ */
+const DEFAULT_PROVIDER = "pin";
+
+/**
+ * Which provider to route a request at.
+ *
+ * The client sends the provider that `/ai/models` reported for the chosen
+ * model, so the header follows the model rather than contradicting it. An
+ * absent or empty value falls back to the default rather than being sent
+ * blank, because an empty header is a routing decision nobody made.
+ */
+function providerFor(requested: string | undefined): string {
+  const value = (requested ?? "").trim();
+  return value === "" ? DEFAULT_PROVIDER : value;
+}
 const DEFAULT_MODEL = "GLM-4-32B";
 
 type ChatCompletionResponse = {
@@ -183,6 +204,7 @@ router.post("/ai/suggest", async (req, res) => {
 
   const input = parsed.data;
   const model = input.model || DEFAULT_MODEL;
+  const provider = providerFor(input.provider);
   const count = input.numberOfSuggestions ?? 3;
   const maxCharacters = input.maxCharacters ?? 1300;
   const systemPrompt = [
@@ -202,7 +224,7 @@ router.post("/ai/suggest", async (req, res) => {
       headers: {
         Authorization: `Bearer ${getApiKey()}`,
         "Content-Type": "application/json",
-        "X-AiAssist-Provider": AIASSIST_PROVIDER,
+        "X-AiAssist-Provider": provider,
       },
       body: JSON.stringify({
         model,
@@ -245,7 +267,7 @@ router.post("/ai/suggest", async (req, res) => {
         characterCount: String(suggestion.text ?? "").length,
       })),
       model: payload.model ?? model,
-      provider: AIASSIST_PROVIDER,
+      provider,
       usage: {
         inputTokens: payload.usage?.prompt_tokens ?? 0,
         outputTokens: payload.usage?.completion_tokens ?? 0,
@@ -286,6 +308,7 @@ router.post("/ai/brief", async (req, res) => {
 
   const input = parsed.data;
   const model = input.model || DEFAULT_MODEL;
+  const provider = providerFor(input.provider);
 
   const systemPrompt = [
     "You help a social media operator fill in a post composer.",
@@ -308,7 +331,7 @@ router.post("/ai/brief", async (req, res) => {
       headers: {
         Authorization: `Bearer ${getApiKey()}`,
         "Content-Type": "application/json",
-        "X-AiAssist-Provider": AIASSIST_PROVIDER,
+        "X-AiAssist-Provider": provider,
       },
       body: JSON.stringify({
         model,

@@ -345,6 +345,13 @@ components:
             $ref: "#/components/schemas/AiBriefTurn"
         model:
           type: string
+        provider:
+          type: string
+          description: >-
+            Which gateway provider serves the chosen model, from /ai/models.
+            Sent as X-AiAssist-Provider so the request reaches the vendor that
+            actually has the model. Omitted when unknown, in which case the
+            gateway infers it from the model id.
     AiBriefProposal:
       type: object
       description: >-
@@ -417,6 +424,13 @@ components:
           maxLength: 12000
         model:
           type: string
+        provider:
+          type: string
+          description: >-
+            Which gateway provider serves the chosen model, from /ai/models.
+            Sent as X-AiAssist-Provider so the request reaches the vendor that
+            actually has the model. Omitted when unknown, in which case the
+            gateway infers it from the model id.
         numberOfSuggestions:
           type: number
           minimum: 1
