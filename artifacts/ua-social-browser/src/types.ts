@@ -125,6 +125,23 @@ export interface Draft {
     at: string;
     postUrl: string | null;
   } | null;
+  /**
+   * Where the text came from, when it came from one generation of options.
+   *
+   * Several drafts can be kept out of a single composer run, and by the time
+   * they reach the queue nothing else records that they were alternatives to
+   * each other rather than separate posts. That matters at the moment of
+   * approval: clearing three of them sends one idea three times.
+   *
+   * Absent on anything hand-written — the Network page composes directly, and
+   * a post with no siblings has no group to belong to.
+   */
+  origin?: {
+    /** Shared by every draft kept out of the same generation. */
+    generationId: string;
+    /** The candidate's "Option N" at the time it was kept. */
+    ordinal: number;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

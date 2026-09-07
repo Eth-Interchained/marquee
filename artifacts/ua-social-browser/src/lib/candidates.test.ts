@@ -34,6 +34,7 @@ test('a fresh generation numbers from one', () => {
   const { candidates, nextOrdinal } = replaceCandidates({
     incoming: [suggestion('a'), suggestion('b')],
     makeId: ids(),
+    generationId: 'gen-1',
   });
 
   assert.deepEqual(
@@ -45,12 +46,13 @@ test('a fresh generation numbers from one', () => {
 
 test('generating more adds to the pool instead of replacing it', () => {
   const makeId = ids();
-  const first = replaceCandidates({ incoming: [suggestion('a')], makeId });
+  const first = replaceCandidates({ incoming: [suggestion('a')], makeId, generationId: 'gen-1' });
   const second = appendCandidates({
     existing: first.candidates,
     incoming: [suggestion('b'), suggestion('c')],
     startOrdinal: first.nextOrdinal,
     makeId,
+    generationId: 'gen-2',
   });
 
   assert.deepEqual(
@@ -65,12 +67,14 @@ test('ordinals keep climbing across generations and never renumber', () => {
   const first = replaceCandidates({
     incoming: [suggestion('a'), suggestion('b')],
     makeId,
+    generationId: 'gen-1',
   });
   const second = appendCandidates({
     existing: first.candidates,
     incoming: [suggestion('c')],
     startOrdinal: first.nextOrdinal,
     makeId,
+    generationId: 'gen-2',
   });
 
   assert.deepEqual(
@@ -88,12 +92,13 @@ test('ordinals keep climbing across generations and never renumber', () => {
 
 test('a model repeating itself does not fill the pool with repeats', () => {
   const makeId = ids();
-  const first = replaceCandidates({ incoming: [suggestion('same')], makeId });
+  const first = replaceCandidates({ incoming: [suggestion('same')], makeId, generationId: 'gen-1' });
   const second = appendCandidates({
     existing: first.candidates,
     incoming: [suggestion('  SAME  '), suggestion('different')],
     startOrdinal: first.nextOrdinal,
     makeId,
+    generationId: 'gen-2',
   });
 
   assert.equal(second.duplicates, 1);
@@ -107,6 +112,7 @@ test('an empty suggestion is never a candidate', () => {
   const { candidates, duplicates } = replaceCandidates({
     incoming: [suggestion('   '), suggestion('real')],
     makeId: ids(),
+    generationId: 'gen-1',
   });
 
   assert.deepEqual(
@@ -120,6 +126,7 @@ test('every candidate gets its own id', () => {
   const { candidates } = replaceCandidates({
     incoming: [suggestion('a'), suggestion('b'), suggestion('c')],
     makeId: ids(),
+    generationId: 'gen-1',
   });
 
   assert.equal(new Set(candidates.map((c) => c.id)).size, 3);
@@ -129,6 +136,7 @@ test('removing a candidate takes only that one', () => {
   const { candidates } = replaceCandidates({
     incoming: [suggestion('a'), suggestion('b'), suggestion('c')],
     makeId: ids(),
+    generationId: 'gen-1',
   });
 
   const left = withoutCandidate(candidates, candidates[1]!.id);
@@ -144,6 +152,7 @@ test("a sign-off never slides onto a card it was not given for", () => {
   const { candidates } = replaceCandidates({
     incoming: [suggestion('a'), suggestion('b'), suggestion('c')],
     makeId: ids(),
+    generationId: 'gen-1',
   });
   const [a, b, c] = candidates as [Candidate, Candidate, Candidate];
 
@@ -161,6 +170,7 @@ test('review flags for departed candidates are dropped', () => {
   const { candidates } = replaceCandidates({
     incoming: [suggestion('a'), suggestion('b')],
     makeId: ids(),
+    generationId: 'gen-1',
   });
   const [a, b] = candidates as [Candidate, Candidate];
 
@@ -174,12 +184,13 @@ test('review flags for departed candidates are dropped', () => {
 
 test('two candidates never share an id, so a removal is never a double removal', () => {
   const makeId = ids();
-  const first = replaceCandidates({ incoming: [suggestion('a')], makeId });
+  const first = replaceCandidates({ incoming: [suggestion('a')], makeId, generationId: 'gen-1' });
   const second = appendCandidates({
     existing: first.candidates,
     incoming: [suggestion('b')],
     startOrdinal: first.nextOrdinal,
     makeId,
+    generationId: 'gen-2',
   });
 
   const allIds = second.candidates.map((c) => c.id);
@@ -187,4 +198,26 @@ test('two candidates never share an id, so a removal is never a double removal',
 
   const left = withoutCandidate(second.candidates, second.candidates[0]!.id);
   assert.equal(left.length, 1, 'removing one card removes exactly one card');
+});
+
+test('candidates carry the generation they arrived in', () => {
+  const makeId = ids();
+  const first = replaceCandidates({
+    incoming: [suggestion('a'), suggestion('b')],
+    makeId,
+    generationId: 'gen-1',
+  });
+  const second = appendCandidates({
+    existing: first.candidates,
+    incoming: [suggestion('c')],
+    startOrdinal: first.nextOrdinal,
+    makeId,
+    generationId: 'gen-2',
+  });
+
+  assert.deepEqual(
+    second.candidates.map((candidate) => candidate.generationId),
+    ['gen-1', 'gen-1', 'gen-2'],
+    'a second batch must not restamp the batch already on screen',
+  );
 });
