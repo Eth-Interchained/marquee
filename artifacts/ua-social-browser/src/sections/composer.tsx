@@ -40,6 +40,7 @@ import {
   withoutCandidate,
   type Candidate,
 } from '@/lib/candidates';
+import { describeRestored, readPool, writePool } from '@/lib/composer-pool';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import {
@@ -154,6 +155,63 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
 
   const modelsQuery = useListAiModels();
   const suggest = useCreateAiSuggestion();
+
+  /**
+   * Options survive a reload; the review ticks do not.
+   *
+   * A crash used to take the whole pool with it — see `lib/composer-pool.ts`.
+   * This restores the text and deliberately leaves `reviewed` empty, so every
+   * recovered card has to be read and ticked again before it can become a
+   * draft. The toast says so, because silently handing back cards that look
+   * reviewed would be the actual hazard.
+   */
+  const restoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    const context = `${workspace.id}:${platform}`;
+    if (restoredFor.current === context) return;
+    restoredFor.current = context;
+
+    const outcome = readPool<AiSuggestion>({
+      storage: window.localStorage,
+      workspaceId: workspace.id,
+      platform,
+      now: Date.now(),
+    });
+
+    if (!outcome.restored) {
+      // Switching context must not leave the previous pool on screen.
+      setSuggestions([]);
+      setReviewed({});
+      nextOrdinal.current = 1;
+      return;
+    }
+
+    setSuggestions(outcome.candidates);
+    setReviewed({});
+    nextOrdinal.current = outcome.nextOrdinal;
+    toast({
+      title: 'Recovered your options',
+      description: describeRestored(outcome.candidates.length),
+    });
+  }, [workspace.id, platform, toast]);
+
+  /**
+   * Mirrors the pool after every change.
+   *
+   * This is also what "delete on interaction" means here: judging a card
+   * removes it from the pool, so the next write no longer contains it, and an
+   * emptied pool clears the key outright.
+   */
+  useEffect(() => {
+    writePool({
+      storage: window.localStorage,
+      workspaceId: workspace.id,
+      platform,
+      candidates: suggestions,
+      nextOrdinal: nextOrdinal.current,
+      now: Date.now(),
+    });
+  }, [suggestions, workspace.id, platform]);
 
   useEffect(
     () => () => {
