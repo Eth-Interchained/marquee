@@ -20,6 +20,8 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AiBriefInput,
+  AiBriefResult,
   AiModelList,
   AiSuggestionInput,
   AiSuggestionResult,
@@ -813,5 +815,77 @@ export const useCreateAiSuggestion = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getCreateAiSuggestionMutationOptions(options));
+    }
+
+export const getCreateAiBriefUrl = () => {
+
+
+
+
+  return `/api/ai/brief`
+}
+
+/**
+ * Prompt mode. The operator describes what they want in plain language and the model proposes the composer's settings — platform, task, tone, audience, notes, how many options. It PROPOSES only: the answer is applied to the form the operator can see and edit, and generating still takes their click. Nothing here reaches a network.
+ * @summary Turn a conversation into a proposed composer brief
+ */
+export const createAiBrief = async (aiBriefInput: AiBriefInput, options?: Parameters<typeof customFetch>[1]): Promise<AiBriefResult> => {
+
+  return customFetch<AiBriefResult>(getCreateAiBriefUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(aiBriefInput)
+  }
+);}
+
+
+
+
+
+export const getCreateAiBriefMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAiBrief>>, TError,{data: BodyType<AiBriefInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createAiBrief>>, TError,{data: BodyType<AiBriefInput>}, TContext> => {
+
+const mutationKey = ['createAiBrief'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createAiBrief>>, {data: BodyType<AiBriefInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createAiBrief(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateAiBriefMutationResult = NonNullable<Awaited<ReturnType<typeof createAiBrief>>>
+    export type CreateAiBriefMutationBody = BodyType<AiBriefInput>
+    export type CreateAiBriefMutationError = ErrorType<void>
+
+    /**
+ * @summary Turn a conversation into a proposed composer brief
+ */
+export const useCreateAiBrief = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAiBrief>>, TError,{data: BodyType<AiBriefInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createAiBrief>>,
+        TError,
+        {data: BodyType<AiBriefInput>},
+        TContext
+      > => {
+      return useMutation(getCreateAiBriefMutationOptions(options));
     }
 

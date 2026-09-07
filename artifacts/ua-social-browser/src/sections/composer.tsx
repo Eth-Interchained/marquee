@@ -6,11 +6,15 @@ import {
   Copy,
   Infinity as InfinityIcon,
   Loader2,
+  MessageSquare,
+  Send,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   Wand2,
 } from "lucide-react";
 import {
+  useCreateAiBrief,
   useCreateAiSuggestion,
   useListAiModels,
   type AiSuggestion,
@@ -40,6 +44,12 @@ import {
   withoutCandidate,
   type Candidate,
 } from "@/lib/candidates";
+import {
+  applyBrief,
+  describeChanges,
+  type AppliedBrief,
+  type FormState,
+} from "@/lib/brief";
 import { describeRestored, readPool, writePool } from "@/lib/composer-pool";
 import { cn } from "@/lib/utils";
 import { SectionShell, type SectionProps } from "@/sections/section-shell";
@@ -166,8 +176,27 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   const revealTimers = useRef<number[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  /**
+   * Two ways into the same brief.
+   *
+   * "form" is the original: six fields, answered directly. "prompt" lets the
+   * operator describe the post in a sentence and has the model fill those same
+   * fields in. It is a faster way to fill the form, NOT a second route to
+   * publishing — the proposal lands in fields they can see and edit, and
+   * generating still takes their click.
+   */
+  const [composerMode, setComposerMode] = useState<"form" | "prompt">("form");
+  const [chat, setChat] = useState<
+    Array<{ id: string; role: "operator" | "model"; content: string }>
+  >([]);
+  const [prompt, setPrompt] = useState("");
+  /** A proposal waiting to be read. Never applied without the operator. */
+  const [pendingBrief, setPendingBrief] = useState<AppliedBrief | null>(null);
+  const [briefError, setBriefError] = useState<string | null>(null);
+
   const modelsQuery = useListAiModels();
   const suggest = useCreateAiSuggestion();
+  const brief = useCreateAiBrief();
 
   /**
    * Options survive a reload; the review ticks do not.
@@ -249,13 +278,102 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   const limit = PLATFORM_LIMIT[platform];
   const canSubmit = sourceText.trim().length >= 3 && !suggest.isPending;
 
+
+  /** The form as prompt mode sees it, and as `applyBrief` compares against. */
+  function currentForm(): FormState {
+    return { platform, task, tone, audience, sourceText, count, includeHashtags };
+  }
+
+  /**
+   * Sends the conversation and holds the answer for the operator to read.
+   *
+   * The proposal is NOT applied here. `applyBrief` computes what would change
+   * and that account is shown first, because a form that rewrites itself while
+   * you are looking away is the same complaint as the queue jumping under the
+   * cursor.
+   */
+  function sendPrompt() {
+    const said = prompt.trim();
+    if (said === "" || brief.isPending) return;
+
+    const turn = { id: createId("turn"), role: "operator" as const, content: said };
+    const conversation = [...chat, turn];
+    setChat(conversation);
+    setPrompt("");
+    setBriefError(null);
+    setPendingBrief(null);
+
+    brief.mutate(
+      {
+        data: {
+          platform: platform as AiSuggestionInputPlatform,
+          model,
+          conversation: conversation.map((entry) => ({
+            role: entry.role,
+            content: entry.content,
+          })),
+        },
+      },
+      {
+        onSuccess: (result) => {
+          setChat((current) => [
+            ...current,
+            { id: createId("turn"), role: "model", content: result.reply },
+          ]);
+          const applied = applyBrief(currentForm(), result.proposal ?? {});
+          setPendingBrief(applied);
+        },
+        onError: () => {
+          setBriefError(
+            "AiAssist could not read that. Nothing in the form was changed.",
+          );
+        },
+      },
+    );
+  }
+
+  /** Applies a read proposal, and optionally goes straight on to generating. */
+  function acceptBrief(applied: AppliedBrief, thenGenerate: boolean) {
+    setPlatform(applied.next.platform);
+    setTask(applied.next.task as AiSuggestionInputTask);
+    setTone(applied.next.tone);
+    setAudience(applied.next.audience);
+    setSourceText(applied.next.sourceText);
+    setCount(applied.next.count);
+    setIncludeHashtags(applied.next.includeHashtags);
+    setPendingBrief(null);
+
+    toast({ title: "Brief applied", description: describeChanges(applied) });
+
+    if (thenGenerate) {
+      // Back to the form, because that is where the options appear and where
+      // the operator judges them. Prompt mode's job ends at a filled brief.
+      setComposerMode("form");
+      // The state above lands on the next render; generate from the values
+      // just computed rather than from stale closure state.
+      handleGenerate("replace", applied.next);
+    }
+  }
+
   /**
    * `mode` is the difference between starting over and keeping the loop going.
    * "More" appends, so options accumulate while you work through them; the
    * plain generate replaces, for when the brief itself has changed.
    */
-  function handleGenerate(mode: "replace" | "more" = "replace") {
-    if (!canSubmit) return;
+  function handleGenerate(
+    mode: "replace" | "more" = "replace",
+    /**
+     * The brief to generate from, when it is not the one in state yet.
+     *
+     * `acceptBrief` applies a proposal and can go straight on to generating.
+     * React has not re-rendered at that point, so reading the fields from
+     * state here would send the PREVIOUS brief — the operator would watch the
+     * form fill in correctly and get options for what it used to say.
+     */
+    override?: FormState,
+  ) {
+    const form = override ?? currentForm();
+    if (form.sourceText.trim().length < 3 || suggest.isPending) return;
     setErrorMessage(null);
     setPendingMode(mode);
     // One id per request, stamped onto every candidate it returns. It is what
@@ -266,15 +384,15 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     suggest.mutate(
       {
         data: {
-          platform: platform as AiSuggestionInputPlatform,
-          task,
-          tone,
-          audience,
-          sourceText: sourceText.trim(),
+          platform: form.platform as AiSuggestionInputPlatform,
+          task: form.task as AiSuggestionInputTask,
+          tone: form.tone,
+          audience: form.audience,
+          sourceText: form.sourceText.trim(),
           model,
-          numberOfSuggestions: count,
-          maxCharacters: limit,
-          includeHashtags,
+          numberOfSuggestions: form.count,
+          maxCharacters: PLATFORM_LIMIT[form.platform],
+          includeHashtags: form.includeHashtags,
         },
       },
       {
@@ -478,6 +596,35 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     <SectionShell
       title="AI Composer"
       description="The model proposes. You decide. Every suggestion needs an explicit review before it can become a draft — nothing is queued or published automatically."
+      actions={
+        <div className="flex items-center gap-1 rounded-md border border-border p-1">
+          {(
+            [
+              { id: "form", label: "Form", icon: SlidersHorizontal,
+                hint: "Answer the fields yourself" },
+              { id: "prompt", label: "Prompt", icon: MessageSquare,
+                hint: "Describe it and let the model fill the fields in" },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setComposerMode(option.id)}
+              title={option.hint}
+              className={cn(
+                "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors hover-elevate",
+                composerMode === option.id
+                  ? "bg-accent font-medium text-accent-foreground"
+                  : "text-muted-foreground",
+              )}
+              data-testid={`mode-${option.id}`}
+            >
+              <option.icon className="h-3.5 w-3.5" />
+              {option.label}
+            </button>
+          ))}
+        </div>
+      }
     >
       <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
         <Card className="h-fit">
@@ -614,7 +761,187 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
         </Card>
 
         <div className="flex flex-col gap-4">
-          <Card>
+          {composerMode === "prompt" ? (
+            <Card data-testid="prompt-panel">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">
+                  Describe the post you want
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Say it however you like — what it is about, who it is for, how
+                  it should sound. The model fills in the brief on the left; it
+                  does not write the post until you press Generate, and it never
+                  changes a field without showing you first.
+                </p>
+
+                {chat.length > 0 ? (
+                  <div
+                    className="max-h-[280px] space-y-2 overflow-y-auto rounded-md border border-border p-3"
+                    data-testid="prompt-transcript"
+                  >
+                    {chat.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className={cn(
+                          "rounded-md px-3 py-2 text-sm",
+                          entry.role === "operator"
+                            ? "bg-accent/60 text-accent-foreground"
+                            : "border border-border",
+                        )}
+                        data-testid={`turn-${entry.role}`}
+                      >
+                        {entry.content}
+                      </div>
+                    ))}
+                    {brief.isPending ? (
+                      <div className="ua-ghost-bar h-8 w-3/5" />
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/*
+                  The proposal is shown, not applied. A form that rewrites
+                  itself while the operator is reading is the same complaint as
+                  a queue that jumps under the cursor.
+                */}
+                {pendingBrief ? (
+                  <div
+                    className="space-y-3 rounded-md border border-primary/40 bg-primary/5 p-3"
+                    data-testid="brief-proposal"
+                  >
+                    {pendingBrief.changes.length > 0 ? (
+                      <>
+                        <p className="text-xs font-medium">
+                          It would change these:
+                        </p>
+                        <ul className="space-y-1 text-xs">
+                          {pendingBrief.changes.map((change) => (
+                            <li
+                              key={change.field}
+                              className="flex flex-wrap items-baseline gap-1.5"
+                              data-testid={`change-${change.field}`}
+                            >
+                              <span className="font-medium">
+                                {change.label}
+                              </span>
+                              <span className="text-muted-foreground line-through">
+                                {change.from}
+                              </span>
+                              <span aria-hidden="true">→</span>
+                              <span>{change.to}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Nothing in the brief needed changing.
+                      </p>
+                    )}
+
+                    {pendingBrief.refused.length > 0 ? (
+                      <div
+                        className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive"
+                        data-testid="brief-refused"
+                      >
+                        {pendingBrief.refused.map((item) => (
+                          <p key={item.field}>
+                            Ignored {item.field} “{item.value}” — {item.reason}.
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {pendingBrief.changes.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => acceptBrief(pendingBrief, false)}
+                          data-testid="button-apply-brief"
+                        >
+                          Apply to the brief
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            pendingBrief.next.sourceText.trim().length < 3
+                          }
+                          title={
+                            pendingBrief.next.sourceText.trim().length < 3
+                              ? "There are no notes to write from yet — tell it what the post is about"
+                              : undefined
+                          }
+                          onClick={() => acceptBrief(pendingBrief, true)}
+                          data-testid="button-apply-and-generate"
+                        >
+                          <Wand2 className="mr-2 h-3.5 w-3.5" />
+                          Apply and generate
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setPendingBrief(null)}
+                          data-testid="button-discard-brief"
+                        >
+                          Leave the brief alone
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="flex items-end gap-2">
+                  <Textarea
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      // Enter sends, shift+enter is a newline — the shape
+                      // every chat box has, so muscle memory works.
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        sendPrompt();
+                      }
+                    }}
+                    placeholder={
+                      chat.length === 0
+                        ? "e.g. promote the grand reopening on Oct 3, warm but not hype, for locals — three options"
+                        : "Add a correction or another detail"
+                    }
+                    className="min-h-[72px] resize-y"
+                    maxLength={4000}
+                    data-testid="input-prompt"
+                  />
+                  <Button
+                    onClick={sendPrompt}
+                    disabled={prompt.trim() === "" || brief.isPending}
+                    className={cn(brief.isPending && "ua-charging")}
+                    data-testid="button-send-prompt"
+                  >
+                    {brief.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+
+                {briefError ? (
+                  <div
+                    className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                    data-testid="error-prompt"
+                  >
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{briefError}</span>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card className={cn(composerMode === "prompt" && "hidden")}>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Your notes</CardTitle>
             </CardHeader>

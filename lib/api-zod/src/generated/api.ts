@@ -232,3 +232,51 @@ export const CreateAiSuggestionResponse = zod.object({
 })
 
 
+/**
+ * Prompt mode. The operator describes what they want in plain language and the model proposes the composer's settings — platform, task, tone, audience, notes, how many options. It PROPOSES only: the answer is applied to the form the operator can see and edit, and generating still takes their click. Nothing here reaches a network.
+ * @summary Turn a conversation into a proposed composer brief
+ */
+export const createAiBriefBodyConversationItemContentMax = 4000;
+
+export const createAiBriefBodyConversationMax = 20;
+
+
+
+export const CreateAiBriefBody = zod.object({
+  "platform": zod.enum(['x', 'instagram', 'facebook', 'threads', 'linkedin', 'bluesky', 'mastodon', 'reddit', 'tiktok', 'youtube', 'pinterest', 'tumblr']).describe('The workspace\'s network, as the starting assumption.'),
+  "conversation": zod.array(zod.object({
+  "role": zod.enum(['operator', 'model']),
+  "content": zod.string().min(1).max(createAiBriefBodyConversationItemContentMax)
+})).min(1).max(createAiBriefBodyConversationMax),
+  "model": zod.string().optional()
+})
+
+export const createAiBriefResponseProposalToneMax = 100;
+
+export const createAiBriefResponseProposalAudienceMax = 200;
+
+export const createAiBriefResponseProposalSourceTextMax = 12000;
+
+export const createAiBriefResponseProposalNumberOfSuggestionsMax = 8;
+
+
+
+export const CreateAiBriefResponse = zod.object({
+  "reply": zod.string().describe('What to show the operator in the conversation.'),
+  "proposal": zod.object({
+  "platform": zod.enum(['x', 'instagram', 'facebook', 'threads', 'linkedin', 'bluesky', 'mastodon', 'reddit', 'tiktok', 'youtube', 'pinterest', 'tumblr']).optional(),
+  "task": zod.enum(['suggest', 'rewrite', 'shorten', 'expand', 'variants', 'hashtags']).optional(),
+  "tone": zod.string().max(createAiBriefResponseProposalToneMax).optional(),
+  "audience": zod.string().max(createAiBriefResponseProposalAudienceMax).optional(),
+  "sourceText": zod.string().max(createAiBriefResponseProposalSourceTextMax).optional(),
+  "numberOfSuggestions": zod.number().min(1).max(createAiBriefResponseProposalNumberOfSuggestionsMax).optional(),
+  "includeHashtags": zod.boolean().optional()
+}).describe('Every field is optional on purpose. A first message rarely settles all of them, and inventing an audience the operator never mentioned is worse than leaving the field alone — the form keeps its current value and the operator is not misled about what they said.'),
+  "missing": zod.array(zod.string()).optional().describe('Fields the model could not responsibly fill from what was said. The client shows these as still needing the operator, rather than hiding a gap behind a plausible guess.'),
+  "usage": zod.object({
+  "inputTokens": zod.number(),
+  "outputTokens": zod.number()
+})
+})
+
+

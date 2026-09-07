@@ -6,6 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './aiBriefInput';
+export * from './aiBriefInputPlatform';
+export * from './aiBriefProposal';
+export * from './aiBriefProposalPlatform';
+export * from './aiBriefProposalTask';
+export * from './aiBriefResult';
+export * from './aiBriefTurn';
+export * from './aiBriefTurnRole';
 export * from './aiModel';
 export * from './aiModelList';
 export * from './aiSuggestion';
