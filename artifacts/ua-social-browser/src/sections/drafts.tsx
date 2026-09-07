@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -11,17 +11,17 @@ import {
   Send,
   Trash2,
   X as XIcon,
-} from 'lucide-react';
-import { usePublishPost } from '@workspace/api-client-react';
-import type { PublishRequestPlatform } from '@workspace/api-client-react';
+} from "lucide-react";
+import { usePublishPost } from "@workspace/api-client-react";
+import type { PublishRequestPlatform } from "@workspace/api-client-react";
 
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
-import { Textarea } from '@/components/ui/textarea';
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,11 +31,16 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { PlatformGlyph } from '@/components/app/platform-glyph';
-import { useToast } from '@/hooks/use-toast';
-import { approverName, recordedApproval } from '@/lib/approver';
-import { attest, describeAttestation, isRefusal, retract } from '@/lib/attestation';
+} from "@/components/ui/alert-dialog";
+import { PlatformGlyph } from "@/components/app/platform-glyph";
+import { useToast } from "@/hooks/use-toast";
+import { approverName, recordedApproval } from "@/lib/approver";
+import {
+  attest,
+  describeAttestation,
+  isRefusal,
+  retract,
+} from "@/lib/attestation";
 import {
   MEDIA_ACCEPT_ATTRIBUTE,
   formatBytes,
@@ -57,66 +62,67 @@ import {
   logActivity,
   relativeTime,
   toLocalInputValue,
-} from '@/lib/workspace';
-import type { Draft, DraftMedia, DraftStatus } from '@/types';
+} from "@/lib/workspace";
+import type { Draft, DraftMedia, DraftStatus } from "@/types";
 
-type Filter = 'all' | 'pending' | 'approved' | 'published';
+type Filter = "all" | "pending" | "approved" | "published";
 
 const FILTERS: Array<{ id: Filter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'pending', label: 'Needs review' },
-  { id: 'approved', label: 'Approved' },
-  { id: 'published', label: 'Posted' },
+  { id: "all", label: "All" },
+  { id: "pending", label: "Needs review" },
+  { id: "approved", label: "Approved" },
+  { id: "published", label: "Posted" },
 ];
 
 const STATUS_STYLE: Record<DraftStatus, string> = {
-  draft: 'border-border text-muted-foreground',
-  approved: 'border-primary/50 text-primary',
-  scheduled: 'border-chart-4/50 text-chart-4',
-  publishing: 'border-chart-3/50 text-chart-3',
-  published: 'border-chart-2/50 text-chart-2',
-  failed: 'border-destructive/50 text-destructive',
+  draft: "border-border text-muted-foreground",
+  approved: "border-primary/50 text-primary",
+  scheduled: "border-chart-4/50 text-chart-4",
+  publishing: "border-chart-3/50 text-chart-3",
+  published: "border-chart-2/50 text-chart-2",
+  failed: "border-destructive/50 text-destructive",
   // Deliberately not the `published` green. The post is out, but on the
   // operator's word rather than the network's, and the badge should not look
   // like a confirmation.
-  attested: 'border-chart-4/50 text-chart-4',
+  attested: "border-chart-4/50 text-chart-4",
 };
 
 const STATUS_LABEL: Record<DraftStatus, string> = {
-  draft: 'Needs review',
-  approved: 'Approved',
-  scheduled: 'Scheduled',
-  publishing: 'Posting',
-  published: 'Posted',
-  failed: 'Failed',
+  draft: "Needs review",
+  approved: "Approved",
+  scheduled: "Scheduled",
+  publishing: "Posting",
+  published: "Posted",
+  failed: "Failed",
   // Names the source of the claim. "Posted" on its own would be the exact
   // conflation this status exists to prevent.
-  attested: 'Posted · your word',
+  attested: "Posted · your word",
 };
 
 function matchesFilter(draft: Draft, filter: Filter): boolean {
   switch (filter) {
-    case 'all':
+    case "all":
       return true;
-    case 'pending':
-      return draft.status === 'draft' || draft.status === 'failed';
-    case 'approved':
-      return draft.status === 'approved' || draft.status === 'scheduled';
-    case 'published':
+    case "pending":
+      return draft.status === "draft" || draft.status === "failed";
+    case "approved":
+      return draft.status === "approved" || draft.status === "scheduled";
+    case "published":
       // An attested post is a post, as far as the operator is concerned — this
       // is where they will look for it. The badge on the card is what keeps the
       // network's confirmation and the operator's word distinguishable.
-      return draft.status === 'published' || draft.status === 'attested';
+      return draft.status === "published" || draft.status === "attested";
   }
 }
 
 /** The publish endpoint returns its reason in the error body. */
 function failureMessage(error: unknown): string {
   const data = (error as { data?: { message?: string; error?: string } })?.data;
+
   return (
     data?.message ??
     data?.error ??
-    'The post could not be sent. Nothing was published.'
+    "The post could not be sent. Nothing was published."
   );
 }
 
@@ -136,7 +142,7 @@ export function Drafts({
   onFocusHandled?: () => void;
 }) {
   const { toast } = useToast();
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<Filter>("all");
   const [pendingPublish, setPendingPublish] = useState<Draft | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
@@ -149,7 +155,7 @@ export function Drafts({
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   /** The failed post the operator is correcting, and the link they are giving. */
   const [attesting, setAttesting] = useState<Draft | null>(null);
-  const [attestedUrl, setAttestedUrl] = useState('');
+  const [attestedUrl, setAttestedUrl] = useState("");
   const fileInputPrefix = useId();
   const publishPost = usePublishPost();
 
@@ -180,7 +186,7 @@ export function Drafts({
    */
   const rows = groupSiblings(drafts);
   const awaitingReview = drafts.some(
-    (draft) => draft.status === 'draft' || draft.status === 'failed',
+    (draft) => draft.status === "draft" || draft.status === "failed",
   );
 
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
@@ -190,7 +196,7 @@ export function Drafts({
   // A post arrived at from the calendar may be filtered out of this view, so
   // widen the filter first and scroll to it once it is actually on screen.
   useEffect(() => {
-    if (focusedDraftId) setFilter('all');
+    if (focusedDraftId) setFilter("all");
   }, [focusedDraftId]);
 
   useEffect(() => {
@@ -198,7 +204,7 @@ export function Drafts({
 
     cardRefs.current
       .get(focusedDraftId)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
 
     const timer = window.setTimeout(
       () => focusHandled.current?.(),
@@ -221,15 +227,15 @@ export function Drafts({
   function approve(draft: Draft) {
     if (operator === null) {
       toast({
-        title: 'Say who is approving',
+        title: "Say who is approving",
         description:
-          'Approvals are recorded under your name. Add it under Settings › Approver name, then approve.',
-        variant: 'destructive',
+          "Approvals are recorded under your name. Add it under Settings › Approver name, then approve.",
+        variant: "destructive",
       });
       return;
     }
     patchDraft(draft.id, {
-      status: draft.scheduledFor ? 'scheduled' : 'approved',
+      status: draft.scheduledFor ? "scheduled" : "approved",
       approvedBy: operator,
       approvedAt: new Date().toISOString(),
       lastError: null,
@@ -237,8 +243,8 @@ export function Drafts({
     updateState((current) => ({
       ...current,
       activity: logActivity(current, {
-        type: 'draft',
-        title: 'Approved by a human',
+        type: "draft",
+        title: "Approved by a human",
         detail: `${platformProfile(draft.platform).label} · ${operator}`,
       }),
     }));
@@ -246,7 +252,7 @@ export function Drafts({
 
   function revokeApproval(draft: Draft) {
     patchDraft(draft.id, {
-      status: 'draft',
+      status: "draft",
       approvedBy: null,
       approvedAt: null,
       scheduledFor: null,
@@ -269,9 +275,9 @@ export function Drafts({
 
     if (isRefusal(result)) {
       toast({
-        title: 'Not recorded',
+        title: "Not recorded",
         description: result.refused,
-        variant: 'destructive',
+        variant: "destructive",
       });
       return;
     }
@@ -280,28 +286,28 @@ export function Drafts({
     updateState((current) => ({
       ...current,
       activity: logActivity(current, {
-        type: 'draft',
-        title: 'Corrected by a human',
+        type: "draft",
+        title: "Corrected by a human",
         detail: `${platformProfile(draft.platform).label} · ${operator} confirmed it posted`,
       }),
     }));
     setAttesting(null);
-    setAttestedUrl('');
+    setAttestedUrl("");
   }
 
   /** Puts the record back to what the machine observed. */
   function retractAttestation(draft: Draft) {
     const result = retract(draft);
     if (isRefusal(result)) {
-      toast({ title: 'Nothing to take back', description: result.refused });
+      toast({ title: "Nothing to take back", description: result.refused });
       return;
     }
     patchDraft(draft.id, result);
     updateState((current) => ({
       ...current,
       activity: logActivity(current, {
-        type: 'draft',
-        title: 'Correction withdrawn',
+        type: "draft",
+        title: "Correction withdrawn",
         detail: `${platformProfile(draft.platform).label} · back to what the shell saw`,
       }),
     }));
@@ -320,8 +326,8 @@ export function Drafts({
     const approved = Boolean(draft.approvedAt);
     patchDraft(draft.id, {
       media,
-      ...(changed && approved && draft.status !== 'published'
-        ? { status: 'draft' as const, approvedBy: null, approvedAt: null }
+      ...(changed && approved && draft.status !== "published"
+        ? { status: "draft" as const, approvedBy: null, approvedAt: null }
         : {}),
     });
   }
@@ -344,9 +350,9 @@ export function Drafts({
         });
         if (refusal) {
           toast({
-            title: 'Not attached',
+            title: "Not attached",
             description: refusal.reason,
-            variant: 'destructive',
+            variant: "destructive",
           });
           continue;
         }
@@ -355,10 +361,12 @@ export function Drafts({
           attached.push(await uploadMedia(file));
         } catch (error) {
           toast({
-            title: 'Not attached',
+            title: "Not attached",
             description:
-              error instanceof Error ? error.message : `${file.name} could not be stored.`,
-            variant: 'destructive',
+              error instanceof Error
+                ? error.message
+                : `${file.name} could not be stored.`,
+            variant: "destructive",
           });
         }
       }
@@ -377,12 +385,13 @@ export function Drafts({
     // is to navigate to it, and preventing it here is what marks the element
     // as a valid target.
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
+    event.dataTransfer.dropEffect = "copy";
     if (dropTargetId !== draft.id) setDropTargetId(draft.id);
   }
 
   function onDragLeave(draft: Draft, event: React.DragEvent) {
-    if (!leftTheCard(event.currentTarget, event.relatedTarget as Node | null)) return;
+    if (!leftTheCard(event.currentTarget, event.relatedTarget as Node | null))
+      return;
     if (dropTargetId === draft.id) setDropTargetId(null);
   }
 
@@ -397,12 +406,12 @@ export function Drafts({
       ...current,
       drafts: current.drafts.filter((item) => item.id !== draft.id),
       activity: logActivity(current, {
-        type: 'draft',
-        title: 'Draft discarded',
+        type: "draft",
+        title: "Draft discarded",
         detail: `${platformProfile(draft.platform).label} · ${workspace.name}`,
       }),
     }));
-    toast({ title: 'Draft discarded' });
+    toast({ title: "Draft discarded" });
   }
 
   function schedule(draft: Draft, value: string) {
@@ -410,7 +419,7 @@ export function Drafts({
     if (!scheduledFor) return;
     patchDraft(draft.id, {
       scheduledFor,
-      status: draft.approvedAt ? 'scheduled' : draft.status,
+      status: draft.approvedAt ? "scheduled" : draft.status,
     });
   }
 
@@ -424,7 +433,7 @@ export function Drafts({
     if (immediate) {
       patchDraft(draft.id, {
         scheduledFor: null,
-        status: draft.status === 'scheduled' ? 'approved' : draft.status,
+        status: draft.status === "scheduled" ? "approved" : draft.status,
       });
       return;
     }
@@ -434,7 +443,7 @@ export function Drafts({
     const suggested = fromLocalInputValue(toLocalInputValue(null));
     patchDraft(draft.id, {
       scheduledFor: suggested,
-      status: draft.approvedAt && suggested ? 'scheduled' : draft.status,
+      status: draft.approvedAt && suggested ? "scheduled" : draft.status,
     });
   }
 
@@ -442,19 +451,23 @@ export function Drafts({
     // The composer refuses this too, but finding out after a window has opened
     // and a network has been driven is a slow way to learn something the app
     // already knew.
-    if (platformProfile(draft.platform).requiresMedia && draft.media.length === 0) {
+    if (
+      platformProfile(draft.platform).requiresMedia &&
+      draft.media.length === 0
+    ) {
       toast({
-        title: 'Needs a picture',
+        title: "Needs a picture",
         description: `${platformProfile(draft.platform).label} does not take a post without an image or video. Attach one and approve it again.`,
-        variant: 'destructive',
+        variant: "destructive",
       });
       return;
     }
     if (recordedApproval(draft) === null) {
       toast({
-        title: 'Approval required',
-        description: 'A person has to sign off before anything reaches the network.',
-        variant: 'destructive',
+        title: "Approval required",
+        description:
+          "A person has to sign off before anything reaches the network.",
+        variant: "destructive",
       });
       return;
     }
@@ -473,14 +486,15 @@ export function Drafts({
     const approval = recordedApproval(draft);
     if (approval === null) {
       toast({
-        title: 'Approval required',
-        description: 'A person has to sign off before anything reaches the network.',
-        variant: 'destructive',
+        title: "Approval required",
+        description:
+          "A person has to sign off before anything reaches the network.",
+        variant: "destructive",
       });
       return;
     }
     setSendingId(draft.id);
-    patchDraft(draft.id, { status: 'publishing', lastError: null });
+    patchDraft(draft.id, { status: "publishing", lastError: null });
 
     try {
       const result = await publishPost.mutateAsync({
@@ -500,37 +514,37 @@ export function Drafts({
       });
 
       patchDraft(draft.id, {
-        status: 'published',
+        status: "published",
         postUrl: result.postUrl ?? null,
         lastError: null,
       });
       updateState((current) => ({
         ...current,
         activity: logActivity(current, {
-          type: 'publish',
-          title: 'Posted through your session',
+          type: "publish",
+          title: "Posted through your session",
           detail: `${platformProfile(draft.platform).label} · ${workspace.name}`,
         }),
       }));
       toast({
         title: `Posted to ${platformProfile(draft.platform).label}`,
-        description: result.message ?? 'Sent from your own signed-in session.',
+        description: result.message ?? "Sent from your own signed-in session.",
       });
     } catch (error) {
       const message = failureMessage(error);
-      patchDraft(draft.id, { status: 'failed', lastError: message });
+      patchDraft(draft.id, { status: "failed", lastError: message });
       updateState((current) => ({
         ...current,
         activity: logActivity(current, {
-          type: 'publish',
-          title: 'Publish attempt failed',
+          type: "publish",
+          title: "Publish attempt failed",
           detail: message,
         }),
       }));
       toast({
-        title: 'Not posted',
+        title: "Not posted",
         description: message,
-        variant: 'destructive',
+        variant: "destructive",
       });
     } finally {
       setSendingId(null);
@@ -992,10 +1006,10 @@ export function Drafts({
               type="button"
               onClick={() => setFilter(option.id)}
               className={cn(
-                'rounded px-2.5 py-1 text-xs transition-colors hover-elevate',
+                "rounded px-2.5 py-1 text-xs transition-colors hover-elevate",
                 filter === option.id
-                  ? 'bg-accent font-medium text-accent-foreground'
-                  : 'text-muted-foreground',
+                  ? "bg-accent font-medium text-accent-foreground"
+                  : "text-muted-foreground",
               )}
               data-testid={`filter-${option.id}`}
             >
@@ -1022,7 +1036,7 @@ export function Drafts({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => onNavigate('settings')}
+              onClick={() => onNavigate("settings")}
               data-testid="button-set-approver"
             >
               Set your approver name
@@ -1034,9 +1048,9 @@ export function Drafts({
       {drafts.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="p-10 text-center text-sm text-muted-foreground">
-            {filter === 'all'
-              ? 'No posts in this workspace yet. Draft one in the AI Composer, or write your own on the Network page, and it lands here for review.'
-              : 'Nothing in this view yet.'}
+            {filter === "all"
+              ? "No posts in this workspace yet. Draft one in the AI Composer, or write your own on the Network page, and it lands here for review."
+              : "Nothing in this view yet."}
           </CardContent>
         </Card>
       ) : (
@@ -1088,7 +1102,7 @@ export function Drafts({
         onOpenChange={(open) => {
           if (!open) {
             setAttesting(null);
-            setAttestedUrl('');
+            setAttestedUrl("");
           }
         }}
       >
@@ -1097,7 +1111,7 @@ export function Drafts({
             <AlertDialogTitle>This one actually posted?</AlertDialogTitle>
             <AlertDialogDescription>
               {operator === null
-                ? 'Corrections are recorded under your name. Add it under Settings › Approver name first.'
+                ? "Corrections are recorded under your name. Add it under Settings › Approver name first."
                 : `The network never confirmed this, so the shell recorded it as failed. Recording it as posted on your word keeps both facts: what the shell saw, and what ${operator} found on the account. It will never read as confirmed by the network.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1139,10 +1153,10 @@ export function Drafts({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Post to{' '}
+              Post to{" "}
               {pendingPublish
                 ? platformProfile(pendingPublish.platform).label
-                : ''}
+                : ""}
               ?
             </AlertDialogTitle>
             <AlertDialogDescription>
