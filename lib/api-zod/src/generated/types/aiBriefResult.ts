@@ -14,5 +14,7 @@ export interface AiBriefResult {
   proposal: AiBriefProposal;
   /** Fields the model could not responsibly fill from what was said. The client shows these as still needing the operator, rather than hiding a gap behind a plausible guess. */
   missing?: string[];
+  /** Set when the tool call's tag and its payload disagree about which fields are being filled in — `<<<SET_BRIEF TONE||AUDIENCE>>>` that then sends only `tone`. The tag is a stated intention, so a disagreement is reported to the operator rather than quietly resolved in favour of one side. */
+  mismatch?: string | null;
   usage: AiUsage;
 }

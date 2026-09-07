@@ -1,5 +1,12 @@
 import { Router, type IRouter } from "express";
-import { jsonFromResponse } from "sentinel-blocks";
+import {
+  CLOSE,
+  END,
+  OPEN,
+  extractBlock,
+  extractTaggedBlocks,
+  jsonFromResponse,
+} from "sentinel-blocks";
 import {
   CreateAiBriefBody,
   CreateAiBriefResponse,
@@ -114,42 +121,222 @@ const TASK_VALUES = [
  * straight onto form state, so anything not in the schema has no business
  * arriving there.
  */
+/**
+ * The one tool prompt mode gives the model.
+ *
+ * Declared as a typed, enumerated schema rather than described in prose,
+ * because that difference is measurable: on `imagine`, identical weights and
+ * identical questions went from 2/7 to 6/7 usable tool calls when the schema
+ * became typed. A model guesses far less when the shape is spelled out, and
+ * every guess here is a field the operator has to notice and undo.
+ *
+ * ONE tool, not several. The model's whole job in prompt mode is to fill in a
+ * brief; a second tool would be a second thing to get wrong.
+ *
+ * THE CALL TRAVELS IN A SENTINEL BLOCK, not as a native tool call. Several
+ * models on this gateway — the PIN network's among them — have no native tool
+ * calling at all, and a feature that works on Anthropic while silently doing
+ * nothing on the operator's own hardware is worse than one mechanism that
+ * works everywhere. `sentinel-blocks` is that mechanism, and its extraction
+ * survives the quotes and newlines a JSON payload arrives with.
+ */
+const SET_BRIEF_TOOL = {
+  name: "set_brief",
+  description:
+    "Fill in one or more fields of the composer's brief. Call it only for what the operator actually told you.",
+  parameters: {
+    platform: `one of: ${PLATFORM_VALUES.join(" | ")}`,
+    task: `one of: ${TASK_VALUES.join(" | ")}`,
+    tone: "string, max 100 chars — how the post should sound",
+    audience: "string, max 200 chars — who it is for",
+    sourceText:
+      "string — the raw facts the post gets written from. Their material, never invented.",
+    numberOfSuggestions: "integer 1-8 — how many options to draft",
+    includeHashtags: "boolean",
+  },
+} as const;
+
+/**
+ * The conversation's instructions.
+ *
+ * Written as a brief to a colleague rather than a list of output rules. The
+ * previous version opened with "Return ONLY a valid JSON object" and the model
+ * answered like a formatter. What the operator wants is someone to talk to who
+ * happens to be filling in a form while they talk.
+ */
+function briefSystemPrompt(platform: string): string {
+  const schema = Object.entries(SET_BRIEF_TOOL.parameters)
+    .map(([field, spec]) => `  ${field}: ${spec}`)
+    .join("\n");
+
+  return [
+    "You are helping a social media operator work out what to post. Talk to them like a colleague who knows the trade: plain, warm, brief. Ask one question at a time when something matters and you do not know it. Never lecture, and never recite their own words back at them.",
+    "",
+    `Their workspace posts to ${platform}. Assume that unless they say otherwise.`,
+    "",
+    "You have ONE tool:",
+    "",
+    `${SET_BRIEF_TOOL.name} — ${SET_BRIEF_TOOL.description}`,
+    schema,
+    "",
+    "Every message you send has this shape. Put what you say to the operator in a CONVERSATION block:",
+    "",
+    `${OPEN}CONVERSATION${CLOSE}`,
+    "Warm it is. Who is this one for — regulars, or people who have not been in yet?",
+    END,
+    "",
+    "And when you want to fill something in, add a SET_BRIEF block. Name the fields you are setting in the tag, separated by ||, and put the values as JSON inside:",
+    "",
+    `${OPEN}SET_BRIEF TONE||AUDIENCE${CLOSE}`,
+    '{ "tone": "Warm and conversational", "audience": "Men and women in Winter Park" }',
+    END,
+    "",
+    "Rules that matter:",
+    "- The CONVERSATION block is the only thing the operator reads. Keep it to a sentence or two, like speech.",
+    "- The tag must name exactly the fields the JSON sets. If they disagree, the call is reported as a mistake rather than applied.",
+    "- Include ONLY the fields they actually told you. Leaving one out keeps whatever the form already has, which is always safer than a guess.",
+    "- If you have nothing to fill in yet — you are only asking a question — send the CONVERSATION block alone. That is a complete turn.",
+    "- Never invent facts. If you do not know the date, the price, or a stylist's name, ask.",
+  ].join("\n");
+}
+
+/**
+ * Reads a completion as two DECLARED blocks, never as leftovers.
+ *
+ *     <<<CONVERSATION>>>
+ *     What the operator reads.
+ *     <<<END>>>
+ *
+ *     <<<SET_BRIEF TONE||AUDIENCE>>>
+ *     { "tone": "...", "audience": "..." }
+ *     <<<END>>>
+ *
+ * The owner's protocol, and it corrects a real mistake. The previous version
+ * took the conversation to be whatever text was LEFT OVER once the tool block
+ * had been stripped out — and stripping meant a regex I had written by hand.
+ * That is exactly the heuristic extraction this module exists to avoid, having
+ * crept back in through the side door. Now both halves are named, both are
+ * extracted by the library, and nothing is inferred from what remains.
+ *
+ * THE TAG DECLARES WHAT THE CALL SETS. `<<<SET_BRIEF TONE||AUDIENCE>>>` says
+ * which fields the payload is meant to carry, so the payload can be checked
+ * against a stated intention instead of simply trusted. A model that names
+ * TONE and then sends SOURCETEXT has done something worth noticing, and the
+ * mismatch is reported rather than silently applied.
+ *
+ * Both blocks are optional, and each absence means something specific:
+ *  - no SET_BRIEF: the model is only talking. A complete, valid turn.
+ *  - no CONVERSATION: an older or blunter model that ignored the format. The
+ *    whole completion becomes the reply, because refusing to show the operator
+ *    words the model genuinely said would be the worse failure.
+ */
 function parseBriefContent(content: string): {
   reply: string;
   proposal: Record<string, unknown>;
   missing: string[];
+  /** Set when the tag and the payload disagree about what is being filled in. */
+  mismatch: string | null;
 } {
-  const parsed = jsonFromResponse<unknown>(content, "BRIEF");
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("AiAssist returned a non-object brief payload");
+  const raw = content.trim();
+  if (raw === "") {
+    throw new Error("AiAssist returned an empty reply");
   }
 
-  const raw = parsed as Record<string, unknown>;
-  const incoming = (raw.proposal ?? {}) as Record<string, unknown>;
-  const allowed = [
-    "platform", "task", "tone", "audience", "sourceText",
-    "numberOfSuggestions", "includeHashtags",
-  ];
+  // What the operator reads. Declared, not deduced.
+  const spoken = extractBlock(raw, "CONVERSATION");
+
+  const calls = extractTaggedBlocks(raw, "SET_BRIEF");
+  // Last call wins: a model that corrects itself mid-message meant the second
+  // one, and applying both in order would let a stale value overwrite a fresh
+  // one depending on key order.
+  const call = calls.length > 0 ? calls[calls.length - 1] : undefined;
+
+  const fallbackReply = () => {
+    if (spoken !== null && spoken !== "") return spoken;
+    // No CONVERSATION block. Show what it said rather than nothing — but not
+    // the machinery, so a bare tool call does not surface as JSON.
+    const withoutBlocks = raw.includes(`${OPEN}SET_BRIEF`) ? "" : raw;
+    return withoutBlocks || "Filled that in.";
+  };
+
+  if (!call) {
+    return { reply: fallbackReply(), proposal: {}, missing: [], mismatch: null };
+  }
+
+  let args: unknown;
+  try {
+    // The ladder, not a bare JSON.parse: arguments arrive with quotes and
+    // newlines that shatter a naive parse.
+    args = jsonFromResponse<unknown>(call.content);
+  } catch {
+    // It TRIED to call the tool and produced rubbish — distinct from just
+    // talking, and worth saying so. Silently proposing nothing would leave the
+    // operator wondering why their instruction had no effect.
+    return {
+      reply:
+        spoken ||
+        "I meant to fill in the brief there but garbled it. Say that again?",
+      proposal: {},
+      missing: [],
+      mismatch: "the tool call was not readable",
+    };
+  }
+
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    return {
+      reply: fallbackReply(),
+      proposal: {},
+      missing: [],
+      mismatch: "the tool call was not an object",
+    };
+  }
+
+  const incoming = args as Record<string, unknown>;
+  const fields = Object.keys(SET_BRIEF_TOOL.parameters);
 
   const proposal: Record<string, unknown> = {};
-  for (const field of allowed) {
+  for (const field of fields) {
     const value = incoming[field];
     // An empty string is not an answer. Letting one through would blank a
-    // field the operator had already filled in, which reads as the app losing
-    // their work rather than the model declining to guess.
+    // field the operator had already filled in, which reads as lost work.
     if (value === undefined || value === null) continue;
     if (typeof value === "string" && value.trim() === "") continue;
     proposal[field] = value;
   }
 
+  // The tag's declaration, checked against what actually arrived.
+  const declared = call.arg
+    .split("||")
+    .map((name) => name.trim().toLowerCase())
+    .filter((name) => name !== "");
+  const applied = Object.keys(proposal).map((f) => f.toLowerCase());
+  const promisedButAbsent = declared.filter((name) => !applied.includes(name));
+  const sentButUndeclared =
+    declared.length > 0
+      ? applied.filter((name) => !declared.includes(name))
+      : [];
+
+  const mismatch =
+    promisedButAbsent.length > 0 || sentButUndeclared.length > 0
+      ? [
+          promisedButAbsent.length > 0
+            ? `named but not sent: ${promisedButAbsent.join(", ")}`
+            : "",
+          sentButUndeclared.length > 0
+            ? `sent but not named: ${sentButUndeclared.join(", ")}`
+            : "",
+        ]
+          .filter((part) => part !== "")
+          .join("; ")
+      : null;
+
   return {
-    reply: typeof raw.reply === "string" && raw.reply.trim() !== ""
-      ? raw.reply
-      : "Filled in what I could from that.",
+    reply: fallbackReply(),
     proposal,
-    missing: Array.isArray(raw.missing)
-      ? raw.missing.filter((m): m is string => typeof m === "string")
-      : [],
+    // Derived, not asked for. The model reporting its own omissions was one
+    // more thing for it to get wrong, and the answer is already knowable.
+    missing: fields.filter((field) => !(field in proposal)),
+    mismatch,
   };
 }
 
@@ -313,21 +500,7 @@ router.post("/ai/brief", async (req, res) => {
   const model = input.model || DEFAULT_MODEL;
   const provider = providerFor(input.provider);
 
-  const systemPrompt = [
-    "You help a social media operator fill in a post composer.",
-    "Put the answer in a sentinel block, exactly: <<<BRIEF>>> then the JSON object on its own lines, then <<<END>>>.",
-    "Everything outside that block is ignored, so talking to the operator before it is fine — but inside the block there must be JSON and nothing else.",
-    'Shape: { "reply": string, "proposal": object, "missing": string[] }.',
-    '"reply" is one or two sentences to the operator: what you understood, and the single most useful question if something important is still unclear.',
-    '"proposal" may contain any of: platform, task, tone, audience, sourceText, numberOfSuggestions, includeHashtags.',
-    "OMIT any field the operator has not actually told you. Do not guess an audience, a tone, or a platform from nothing — an omitted field keeps whatever the form already has, which is the safer outcome.",
-    '"missing" lists the names of fields you deliberately left out because they still need the operator.',
-    `platform must be one of: ${PLATFORM_VALUES.join(", ")}.`,
-    `task must be one of: ${TASK_VALUES.join(", ")}.`,
-    "sourceText is the operator's raw material — the notes the post gets written from. Put the facts they gave you there, and never invent facts they did not state.",
-    "numberOfSuggestions is between 1 and 8.",
-    `The workspace's network is ${input.platform}; assume that unless the operator says otherwise.`,
-  ].join(" ");
+  const systemPrompt = briefSystemPrompt(input.platform);
 
   try {
     const response = await fetch(`${AIASSIST_BASE_URL}/v1/chat/completions`, {

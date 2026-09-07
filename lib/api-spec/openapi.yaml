@@ -398,6 +398,15 @@ components:
             hiding a gap behind a plausible guess.
           items:
             type: string
+        mismatch:
+          type: string
+          nullable: true
+          description: >-
+            Set when the tool call's tag and its payload disagree about which
+            fields are being filled in — `<<<SET_BRIEF TONE||AUDIENCE>>>` that
+            then sends only `tone`. The tag is a stated intention, so a
+            disagreement is reported to the operator rather than quietly
+            resolved in favour of one side.
         usage:
           $ref: "#/components/schemas/AiUsage"
     AiSuggestionInput:
