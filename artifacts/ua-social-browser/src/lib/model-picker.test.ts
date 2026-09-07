@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 
 import {
   describeExcluded,
+  providerOf,
   describeMissingModel,
   modelsForPurpose,
   providerLabel,
@@ -165,5 +166,35 @@ describe('a configured model the account cannot reach', () => {
     // and the operator has it selected, so silence would be the wrong answer.
     const picker = modelsForPurpose(LIVE);
     assert.notEqual(describeMissingModel('tts:chatterbox-turbo', picker), null);
+  });
+});
+
+describe('the provider follows the model', () => {
+  test('a PIN model routes at PIN', () => {
+    const picker = modelsForPurpose(LIVE);
+    assert.equal(providerOf(picker, 'GLM-4-32B'), 'pin');
+  });
+
+  test('a cloud model routes at its own vendor', () => {
+    // The bug this exists for: the header was hardcoded to `pin`, so choosing
+    // Claude sent the request to a network that does not serve it and got
+    // back "No operators available" for a model the picker had just offered.
+    const picker = modelsForPurpose(LIVE);
+    assert.equal(providerOf(picker, 'claude-sonnet-5'), 'anthropic');
+    assert.equal(providerOf(picker, 'gpt-5.5'), 'openai');
+    assert.equal(providerOf(picker, 'gemini-2.5-flash'), 'gemini');
+    assert.equal(providerOf(picker, 'llama-3.3-70b-versatile'), 'groq');
+  });
+
+  test('an unknown model yields undefined, not a guess', () => {
+    // The server then falls back to its own default. Sending a blank header
+    // would be a routing decision nobody made.
+    const picker = modelsForPurpose(LIVE);
+    assert.equal(providerOf(picker, 'pin:mistral:7b'), undefined);
+  });
+
+  test('a model with no provider field yields undefined', () => {
+    const picker = modelsForPurpose([{ id: 'loner', name: 'Loner' }]);
+    assert.equal(providerOf(picker, 'loner'), undefined);
   });
 });

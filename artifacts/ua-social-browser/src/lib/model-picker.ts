@@ -171,3 +171,27 @@ export function describeExcluded(picker: PickerModels): string | null {
     ? 'One speech model is not listed, because this writes text.'
     : `${picker.excluded} speech models are not listed, because this writes text.`;
 }
+
+/**
+ * Which provider serves a given model id.
+ *
+ * The request must carry this, because the gateway routes on it. It was
+ * hardcoded to `pin` for every call, so selecting Claude or GPT sent the
+ * request to the operator's own network — which serves neither, and answers
+ * "No operators available" for a model the picker had just offered. A model
+ * that is selectable and unusable at once is the worst of both.
+ *
+ * Returns undefined when the model is not in the catalogue, and the server
+ * then falls back to its default rather than being handed an empty header.
+ */
+export function providerOf(
+  picker: PickerModels,
+  modelId: string,
+): string | undefined {
+  for (const group of picker.groups) {
+    if (group.models.some((model) => model.id === modelId)) {
+      return group.provider;
+    }
+  }
+  return undefined;
+}

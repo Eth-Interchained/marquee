@@ -55,6 +55,7 @@ import {
   describeExcluded,
   describeMissingModel,
   modelsForPurpose,
+  providerOf,
 } from "@/lib/model-picker";
 import { ModelSelect } from "@/components/app/model-select";
 import { cn } from "@/lib/utils";
@@ -285,6 +286,14 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     [modelsQuery.data],
   );
   const missingModel = describeMissingModel(model, picker);
+  /**
+   * The provider the request must be routed at.
+   *
+   * Follows the SELECTED MODEL. It used to be hardcoded to the workspace's
+   * provider, so picking Claude or GPT still sent the call at PIN — a model
+   * the picker offered and the request could never reach.
+   */
+  const routedProvider = providerOf(picker, model);
   const excludedNote = describeExcluded(picker);
 
   const limit = PLATFORM_LIMIT[platform];
@@ -320,6 +329,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
         data: {
           platform: platform as AiSuggestionInputPlatform,
           model,
+          provider: routedProvider,
           conversation: conversation.map((entry) => ({
             role: entry.role,
             content: entry.content,
@@ -402,6 +412,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           audience: form.audience,
           sourceText: form.sourceText.trim(),
           model,
+          provider: routedProvider,
           numberOfSuggestions: form.count,
           maxCharacters: PLATFORM_LIMIT[form.platform],
           includeHashtags: form.includeHashtags,
@@ -742,7 +753,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               <p className="text-xs text-muted-foreground">
                 {modelsQuery.isError
                   ? "Model list unavailable — using the configured default."
-                  : `Routed server-side through provider "${state.settings.provider}".`}
+                  : `Routed server-side through provider "${routedProvider ?? state.settings.provider}".`}
                 {excludedNote ? ` ${excludedNote}` : ""}
               </p>
             </div>
