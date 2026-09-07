@@ -142,13 +142,31 @@ router.get("/ai/models", async (req, res) => {
       return res.status(502).json({ error: "Unable to load AI models" });
     }
 
-    const payload = (await response.json()) as {
-      data?: Array<{ id?: string; name?: string }>;
-      models?: Array<{ id?: string; name?: string }>;
+    type UpstreamModel = {
+      id?: string;
+      name?: string;
+      provider?: string;
+      modality?: string;
     };
+    const payload = (await response.json()) as {
+      data?: UpstreamModel[];
+      models?: UpstreamModel[];
+    };
+    // `provider` and `modality` are passed through rather than dropped: the
+    // picker groups by the first and refuses audio models by the second, and
+    // this route flattening them to {id, name} is why the client had neither.
+    // Both stay optional — an older gateway omits them, and the client is
+    // built to filter nothing rather than hide models over a missing field.
     const models = (payload.data ?? payload.models ?? [])
       .filter((model) => model.id)
-      .map((model) => ({ id: model.id!, name: model.name ?? model.id! }));
+      .map((model) => ({
+        id: model.id!,
+        name: model.name ?? model.id!,
+        ...(model.provider ? { provider: model.provider } : {}),
+        ...(model.modality === "chat" || model.modality === "audio"
+          ? { modality: model.modality }
+          : {}),
+      }));
 
     return res.json(ListAiModelsResponse.parse({ models }));
   } catch (error) {

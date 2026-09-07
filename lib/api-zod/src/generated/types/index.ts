@@ -16,6 +16,7 @@ export * from './aiBriefTurn';
 export * from './aiBriefTurnRole';
 export * from './aiModel';
 export * from './aiModelList';
+export * from './aiModelModality';
 export * from './aiSuggestion';
 export * from './aiSuggestionInput';
 export * from './aiSuggestionInputPlatform';
