@@ -187,6 +187,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     if (!canSubmit) return;
     setErrorMessage(null);
     setPendingMode(mode);
+    // One id per request, stamped onto every candidate it returns. It is what
+    // lets the queue recognise several kept drafts as variants of one idea
+    // rather than several separate posts — see `lib/sibling-groups.ts`.
+    const generationId = createId('gen');
 
     suggest.mutate(
       {
@@ -214,10 +218,12 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                     incoming: result.suggestions,
                     startOrdinal: nextOrdinal.current,
                     makeId: () => createId('sug'),
+                    generationId,
                   })
                 : replaceCandidates({
                     incoming: result.suggestions,
                     makeId: () => createId('sug'),
+                    generationId,
                   });
             nextOrdinal.current = outcome.nextOrdinal;
             duplicates = outcome.duplicates;
@@ -352,6 +358,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           approvedAt: null,
           postUrl: null,
           lastError: null,
+          origin: {
+            generationId: candidate.generationId,
+            ordinal: candidate.ordinal,
+          },
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },

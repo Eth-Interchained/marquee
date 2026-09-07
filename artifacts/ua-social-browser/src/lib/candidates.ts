@@ -32,11 +32,20 @@ export type Candidate<T extends SuggestionLike = SuggestionLike> = T & {
   id: string;
   /** Assigned on arrival, never reassigned. Drives the "Option N" label. */
   ordinal: number;
+  /**
+   * The generation this candidate arrived in.
+   *
+   * Carried so that drafts kept out of one run can be recognised as variants
+   * of each other later — see `lib/sibling-groups.ts`. Required rather than
+   * defaulted: a candidate whose origin quietly went missing produces a queue
+   * that silently stops grouping, which looks like working software.
+   */
+  generationId: string;
 };
 
 /** Most suggestions differ; the ones that do not differ only in whitespace. */
 function normalise(text: string): string {
-  return text.trim().replace(/\s+/g, ' ').toLowerCase();
+  return text.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 export type AppendResult<T extends SuggestionLike> = {
@@ -59,20 +68,29 @@ export function appendCandidates<T extends SuggestionLike>(input: {
   incoming: readonly T[];
   startOrdinal: number;
   makeId: () => string;
+  /** Shared by every candidate in this batch. */
+  generationId: string;
 }): AppendResult<T> {
-  const seen = new Set(input.existing.map((candidate) => normalise(candidate.text)));
+  const seen = new Set(
+    input.existing.map((candidate) => normalise(candidate.text)),
+  );
   const candidates = [...input.existing];
   let ordinal = input.startOrdinal;
   let duplicates = 0;
 
   for (const suggestion of input.incoming) {
     const key = normalise(suggestion.text);
-    if (key === '' || seen.has(key)) {
+    if (key === "" || seen.has(key)) {
       duplicates += 1;
       continue;
     }
     seen.add(key);
-    candidates.push({ ...suggestion, id: input.makeId(), ordinal });
+    candidates.push({
+      ...suggestion,
+      id: input.makeId(),
+      ordinal,
+      generationId: input.generationId,
+    });
     ordinal += 1;
   }
 
@@ -83,12 +101,14 @@ export function appendCandidates<T extends SuggestionLike>(input: {
 export function replaceCandidates<T extends SuggestionLike>(input: {
   incoming: readonly T[];
   makeId: () => string;
+  generationId: string;
 }): AppendResult<T> {
   return appendCandidates({
     existing: [],
     incoming: input.incoming,
     startOrdinal: 1,
     makeId: input.makeId,
+    generationId: input.generationId,
   });
 }
 

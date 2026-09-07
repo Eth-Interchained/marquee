@@ -5,6 +5,7 @@ import {
   CalendarClock,
   ExternalLink,
   ImagePlus,
+  Layers,
   Loader2,
   RotateCcw,
   Send,
@@ -45,6 +46,7 @@ import {
 } from '@/lib/media';
 import { draggingFiles, leftTheCard } from '@/lib/drop';
 import { orderForQueue } from '@/lib/queue-order';
+import { groupSiblings } from '@/lib/sibling-groups';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
@@ -169,6 +171,14 @@ export function Drafts({
       matchesFilter(draft, filter),
     ),
   );
+  /**
+   * The same drafts, with variants of one generation folded into a stack.
+   *
+   * Runs after the ordering, never instead of it: a group takes the place of
+   * its first member and only gathers siblings of the same status. See
+   * `lib/sibling-groups.ts`.
+   */
+  const rows = groupSiblings(drafts);
   const awaitingReview = drafts.some(
     (draft) => draft.status === 'draft' || draft.status === 'failed',
   );
@@ -527,6 +537,449 @@ export function Drafts({
     }
   }
 
+  /**
+   * One card in the queue.
+   *
+   * A function rather than an inline map body because the queue now renders
+   * two shapes — a lone draft and a stack of variants — and both must be the
+   * same card. Duplicating it would let the two drift.
+   */
+  function renderDraftCard(draft: Draft) {
+          const network = platformProfile(draft.platform);
+          const overLimit = draft.body.length > network.charLimit;
+          const locked =
+            draft.status === 'published' || draft.status === 'publishing';
+          const isSending = sendingId === draft.id;
+          const approved = Boolean(draft.approvedAt);
+          const needsMedia = network.requiresMedia && draft.media.length === 0;
+          const isDropTarget = dropTargetId === draft.id;
+          // No time set is not an unfinished schedule — it is the normal
+          // case: it goes out when a person presses Post.
+          const immediate = draft.scheduledFor === null;
+
+          return (
+            <Card
+              key={draft.id}
+              ref={(node) => {
+                if (node) cardRefs.current.set(draft.id, node);
+                else cardRefs.current.delete(draft.id);
+              }}
+              className={cn(
+                'relative transition-colors',
+                focusedDraftId === draft.id &&
+                  'ring-2 ring-primary ring-offset-2 ring-offset-background',
+                isDropTarget && 'ring-2 ring-primary border-primary',
+              )}
+              // The whole card is the target, not a small strip inside it —
+              // a drop zone you have to aim for is worse than a button.
+              {...(locked
+                ? {}
+                : {
+                    onDragOver: (event: React.DragEvent) => onDragOver(draft, event),
+                    onDragLeave: (event: React.DragEvent) => onDragLeave(draft, event),
+                    onDrop: (event: React.DragEvent) => onDrop(draft, event),
+                  })}
+              data-testid={`draft-${draft.id}`}
+            >
+              {isDropTarget ? (
+                <div
+                  className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/85"
+                  data-testid={`dropzone-${draft.id}`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium text-primary">
+                    <ImagePlus className="h-4 w-4" />
+                    Drop to attach to this post
+                  </span>
+                </div>
+              ) : null}
+              <CardContent className="space-y-3 p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <PlatformGlyph platform={draft.platform} tinted />
+                  <span className="text-sm font-medium">{network.label}</span>
+                  <span
+                    className={cn(
+                      'rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide',
+                      STATUS_STYLE[draft.status],
+                    )}
+                  >
+                    {STATUS_LABEL[draft.status]}
+                  </span>
+                  {approved ? (
+                    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <BadgeCheck className="h-3.5 w-3.5 text-chart-2" />
+                      {draft.approvedBy} · {relativeTime(draft.approvedAt!)}
+                    </span>
+                  ) : null}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    Updated {relativeTime(draft.updatedAt)}
+                  </span>
+                </div>
+
+                <Textarea
+                  value={draft.body}
+                  readOnly={locked}
+                  onChange={(event) =>
+                    patchDraft(draft.id, {
+                      body: event.target.value,
+                      // Editing after approval invalidates the sign-off.
+                      ...(approved && draft.status !== 'published'
+                        ? {
+                            status: 'draft' as const,
+                            approvedBy: null,
+                            approvedAt: null,
+                          }
+                        : {}),
+                    })
+                  }
+                  className="min-h-[110px] resize-y"
+                  data-testid={`input-body-${draft.id}`}
+                />
+
+                <div className="space-y-2">
+                  {draft.media.length > 0 ? (
+                    <div className="flex flex-wrap gap-3">
+                      {draft.media.map((item) => (
+                        <div
+                          key={item.id}
+                          className="w-44 space-y-1.5 rounded-md border border-border p-2"
+                          data-testid={`media-${draft.id}-${item.sha256.slice(0, 8)}`}
+                        >
+                          <div className="relative">
+                            {item.mimeType.startsWith('video/') ? (
+                              <video
+                                src={mediaUrl(item)}
+                                className="h-24 w-full rounded object-cover"
+                                muted
+                              />
+                            ) : (
+                              <img
+                                src={mediaUrl(item)}
+                                alt={item.altText || item.filename}
+                                className="h-24 w-full rounded object-cover"
+                              />
+                            )}
+                            {!locked ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setMedia(
+                                    draft,
+                                    draft.media.filter((other) => other.id !== item.id),
+                                  )
+                                }
+                                className="absolute right-1 top-1 rounded-full bg-background/90 p-1 hover-elevate"
+                                aria-label={`Remove ${item.filename}`}
+                                data-testid={`button-remove-media-${draft.id}-${item.sha256.slice(0, 8)}`}
+                              >
+                                <XIcon className="h-3 w-3" />
+                              </button>
+                            ) : null}
+                          </div>
+                          <p className="truncate text-[11px] text-muted-foreground" title={item.filename}>
+                            {item.filename} · {formatBytes(item.bytes)}
+                          </p>
+                          {network.supportsAltText ? (
+                            <Input
+                              value={item.altText ?? ''}
+                              readOnly={locked}
+                              placeholder="Describe it"
+                              onChange={(event) =>
+                                setMedia(
+                                  draft,
+                                  draft.media.map((other) =>
+                                    other.id === item.id
+                                      ? { ...other, altText: event.target.value }
+                                      : other,
+                                  ),
+                                )
+                              }
+                              className="h-7 text-xs"
+                              aria-label={`Alt text for ${item.filename}`}
+                              data-testid={`input-alt-${draft.id}-${item.sha256.slice(0, 8)}`}
+                            />
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {!locked ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        id={`${fileInputPrefix}-${draft.id}`}
+                        type="file"
+                        multiple
+                        accept={MEDIA_ACCEPT_ATTRIBUTE}
+                        className="hidden"
+                        onChange={(event) => {
+                          void attachFiles(draft, event.target.files);
+                          // Cleared so re-picking the same file still fires.
+                          event.target.value = '';
+                        }}
+                        data-testid={`input-media-${draft.id}`}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        asChild
+                        disabled={uploadingId === draft.id}
+                      >
+                        <label
+                          htmlFor={`${fileInputPrefix}-${draft.id}`}
+                          className="cursor-pointer"
+                          data-testid={`button-attach-${draft.id}`}
+                        >
+                          {uploadingId === draft.id ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ImagePlus className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          {uploadingId === draft.id ? 'Storing' : 'Attach'}
+                        </label>
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        {draft.media.length}/{network.mediaLimit}
+                        {network.requiresMedia && draft.media.length === 0
+                          ? ` · ${network.label} needs one`
+                          : ''}
+                        {approved && draft.media.length > 0
+                          ? ' · changing these clears the approval'
+                          : ''}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {draft.status === 'failed' && draft.lastError ? (
+                  <div
+                    className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                    data-testid={`error-${draft.id}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{draft.lastError}</span>
+                    </div>
+                    {/*
+                      The operator can see the account; this app cannot. When
+                      they have looked and the post is there, the record needs
+                      a way to say so — see `lib/attestation.ts` for why that
+                      is `attested` and never `published`.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() => setAttesting(draft)}
+                      className="text-xs underline underline-offset-2"
+                      data-testid={`button-attest-${draft.id}`}
+                    >
+                      Checked the account — it actually posted
+                    </button>
+                  </div>
+                ) : null}
+
+                {draft.status === 'attested' && draft.attestation ? (
+                  <div
+                    className="space-y-2 rounded-md border border-chart-4/40 bg-chart-4/10 p-3 text-sm text-chart-4"
+                    data-testid={`attested-${draft.id}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{describeAttestation(draft)}</span>
+                    </div>
+                    {draft.lastError ? (
+                      <p className="text-xs opacity-80">
+                        What the shell saw at the time: {draft.lastError}
+                      </p>
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-3">
+                      {draft.attestation.postUrl ? (
+                        <a
+                          href={draft.attestation.postUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 text-xs underline underline-offset-2"
+                          data-testid={`link-attested-${draft.id}`}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          The link you gave
+                        </a>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => retractAttestation(draft)}
+                        className="text-xs underline underline-offset-2"
+                        data-testid={`button-retract-${draft.id}`}
+                      >
+                        Take that back
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {draft.status === 'published' && draft.postUrl ? (
+                  <a
+                    href={draft.postUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-sm text-chart-2 underline underline-offset-2"
+                    data-testid={`link-post-${draft.id}`}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View it on {network.label}
+                  </a>
+                ) : null}
+
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id={`immediate-${draft.id}`}
+                          checked={immediate}
+                          disabled={locked}
+                          onCheckedChange={(checked) =>
+                            setImmediate(draft, checked === true)
+                          }
+                          data-testid={`checkbox-immediate-${draft.id}`}
+                        />
+                        <Label
+                          htmlFor={`immediate-${draft.id}`}
+                          className="text-xs font-normal"
+                        >
+                          Post immediately
+                        </Label>
+                      </div>
+
+                      {!immediate ? (
+                        <div className="space-y-1">
+                          <Label
+                            htmlFor={`schedule-${draft.id}`}
+                            className="text-xs text-muted-foreground"
+                          >
+                            Send at
+                          </Label>
+                          <Input
+                            id={`schedule-${draft.id}`}
+                            type="datetime-local"
+                            disabled={locked}
+                            value={toLocalInputValue(draft.scheduledFor)}
+                            onChange={(event) =>
+                              schedule(draft, event.target.value)
+                            }
+                            className="h-9 w-[210px]"
+                            data-testid={`input-schedule-${draft.id}`}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                    <span
+                      className={cn(
+                        'pb-2 text-xs tabular-nums',
+                        overLimit
+                          ? 'font-medium text-destructive'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {draft.body.length} / {network.charLimit}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {!locked ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeDraft(draft)}
+                        data-testid={`button-delete-${draft.id}`}
+                      >
+                        <Trash2 className="mr-2 h-3.5 w-3.5" />
+                        Discard
+                      </Button>
+                    ) : null}
+
+                    {!approved && draft.status !== 'published' ? (
+                      <Button
+                        size="sm"
+                        disabled={overLimit || locked || operator === null}
+                        title={
+                          operator === null
+                            ? 'Set your approver name in Settings first'
+                            : undefined
+                        }
+                        onClick={() => approve(draft)}
+                        data-testid={`button-approve-${draft.id}`}
+                      >
+                        <BadgeCheck className="mr-2 h-3.5 w-3.5" />
+                        Approve
+                      </Button>
+                    ) : null}
+
+                    {approved && draft.status !== 'published' ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => revokeApproval(draft)}
+                          disabled={isSending}
+                          data-testid={`button-revoke-${draft.id}`}
+                        >
+                          <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                          Revoke
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={overLimit || isSending || needsMedia}
+                          title={
+                            needsMedia
+                              ? `${network.label} needs an image or video`
+                              : undefined
+                          }
+                          onClick={() => requestPublish(draft)}
+                          data-testid={`button-publish-${draft.id}`}
+                        >
+                          {isSending ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Send className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          {isSending ? 'Posting' : `Post to ${network.label}`}
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+
+                {immediate && approved && draft.status !== 'published' ? (
+                  <>
+                    <Separator />
+                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Send className="h-3.5 w-3.5" />
+                      No time set: this goes out when you press Post to{' '}
+                      {network.label}, and not before. Tick the box off to
+                      give it a time instead.
+                    </p>
+                  </>
+                ) : null}
+
+                {draft.status === 'scheduled' && draft.scheduledFor ? (
+                  <>
+                    <Separator />
+                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <CalendarClock className="h-3.5 w-3.5" />
+                      Goes out on its own at{' '}
+                      {formatDateTime(draft.scheduledFor)}, through this
+                      workspace's session and under this approval. Edit the
+                      text and the approval drops, so it stays put. One
+                      attempt per time you set: if it fails, the reason lands
+                      here rather than a silent retry — set a new time to try
+                      again.
+                    </p>
+                  </>
+                ) : null}
+              </CardContent>
+            </Card>
+          );  }
+
+
   return (
     <SectionShell
       title="Review queue"
@@ -588,441 +1041,39 @@ export function Drafts({
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
-          {drafts.map((draft) => {
-            const network = platformProfile(draft.platform);
-            const overLimit = draft.body.length > network.charLimit;
-            const locked =
-              draft.status === 'published' || draft.status === 'publishing';
-            const isSending = sendingId === draft.id;
-            const approved = Boolean(draft.approvedAt);
-            const needsMedia = network.requiresMedia && draft.media.length === 0;
-            const isDropTarget = dropTargetId === draft.id;
-            // No time set is not an unfinished schedule — it is the normal
-            // case: it goes out when a person presses Post.
-            const immediate = draft.scheduledFor === null;
-
-            return (
-              <Card
-                key={draft.id}
-                ref={(node) => {
-                  if (node) cardRefs.current.set(draft.id, node);
-                  else cardRefs.current.delete(draft.id);
-                }}
-                className={cn(
-                  'relative transition-colors',
-                  focusedDraftId === draft.id &&
-                    'ring-2 ring-primary ring-offset-2 ring-offset-background',
-                  isDropTarget && 'ring-2 ring-primary border-primary',
-                )}
-                // The whole card is the target, not a small strip inside it —
-                // a drop zone you have to aim for is worse than a button.
-                {...(locked
-                  ? {}
-                  : {
-                      onDragOver: (event: React.DragEvent) => onDragOver(draft, event),
-                      onDragLeave: (event: React.DragEvent) => onDragLeave(draft, event),
-                      onDrop: (event: React.DragEvent) => onDrop(draft, event),
-                    })}
-                data-testid={`draft-${draft.id}`}
+          {rows.map((row) =>
+            row.kind === 'single' ? (
+              renderDraftCard(row.draft)
+            ) : (
+              <div
+                key={row.key}
+                className="rounded-lg border border-dashed border-muted-foreground/40 p-3"
+                data-testid={`sibling-group-${row.generationId}`}
               >
-                {isDropTarget ? (
+                <div className="mb-3 flex flex-wrap items-center gap-2 px-1">
+                  <Layers className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">
+                    {row.drafts.length} variants of one idea
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    kept from the same generation
+                  </span>
+                </div>
+                {row.warning ? (
                   <div
-                    className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/85"
-                    data-testid={`dropzone-${draft.id}`}
+                    className="mb-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                    data-testid={`sibling-warning-${row.generationId}`}
                   >
-                    <span className="flex items-center gap-2 text-sm font-medium text-primary">
-                      <ImagePlus className="h-4 w-4" />
-                      Drop to attach to this post
-                    </span>
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{row.warning}</span>
                   </div>
                 ) : null}
-                <CardContent className="space-y-3 p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <PlatformGlyph platform={draft.platform} tinted />
-                    <span className="text-sm font-medium">{network.label}</span>
-                    <span
-                      className={cn(
-                        'rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide',
-                        STATUS_STYLE[draft.status],
-                      )}
-                    >
-                      {STATUS_LABEL[draft.status]}
-                    </span>
-                    {approved ? (
-                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                        <BadgeCheck className="h-3.5 w-3.5 text-chart-2" />
-                        {draft.approvedBy} · {relativeTime(draft.approvedAt!)}
-                      </span>
-                    ) : null}
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      Updated {relativeTime(draft.updatedAt)}
-                    </span>
-                  </div>
-
-                  <Textarea
-                    value={draft.body}
-                    readOnly={locked}
-                    onChange={(event) =>
-                      patchDraft(draft.id, {
-                        body: event.target.value,
-                        // Editing after approval invalidates the sign-off.
-                        ...(approved && draft.status !== 'published'
-                          ? {
-                              status: 'draft' as const,
-                              approvedBy: null,
-                              approvedAt: null,
-                            }
-                          : {}),
-                      })
-                    }
-                    className="min-h-[110px] resize-y"
-                    data-testid={`input-body-${draft.id}`}
-                  />
-
-                  <div className="space-y-2">
-                    {draft.media.length > 0 ? (
-                      <div className="flex flex-wrap gap-3">
-                        {draft.media.map((item) => (
-                          <div
-                            key={item.id}
-                            className="w-44 space-y-1.5 rounded-md border border-border p-2"
-                            data-testid={`media-${draft.id}-${item.sha256.slice(0, 8)}`}
-                          >
-                            <div className="relative">
-                              {item.mimeType.startsWith('video/') ? (
-                                <video
-                                  src={mediaUrl(item)}
-                                  className="h-24 w-full rounded object-cover"
-                                  muted
-                                />
-                              ) : (
-                                <img
-                                  src={mediaUrl(item)}
-                                  alt={item.altText || item.filename}
-                                  className="h-24 w-full rounded object-cover"
-                                />
-                              )}
-                              {!locked ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setMedia(
-                                      draft,
-                                      draft.media.filter((other) => other.id !== item.id),
-                                    )
-                                  }
-                                  className="absolute right-1 top-1 rounded-full bg-background/90 p-1 hover-elevate"
-                                  aria-label={`Remove ${item.filename}`}
-                                  data-testid={`button-remove-media-${draft.id}-${item.sha256.slice(0, 8)}`}
-                                >
-                                  <XIcon className="h-3 w-3" />
-                                </button>
-                              ) : null}
-                            </div>
-                            <p className="truncate text-[11px] text-muted-foreground" title={item.filename}>
-                              {item.filename} · {formatBytes(item.bytes)}
-                            </p>
-                            {network.supportsAltText ? (
-                              <Input
-                                value={item.altText ?? ''}
-                                readOnly={locked}
-                                placeholder="Describe it"
-                                onChange={(event) =>
-                                  setMedia(
-                                    draft,
-                                    draft.media.map((other) =>
-                                      other.id === item.id
-                                        ? { ...other, altText: event.target.value }
-                                        : other,
-                                    ),
-                                  )
-                                }
-                                className="h-7 text-xs"
-                                aria-label={`Alt text for ${item.filename}`}
-                                data-testid={`input-alt-${draft.id}-${item.sha256.slice(0, 8)}`}
-                              />
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {!locked ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          id={`${fileInputPrefix}-${draft.id}`}
-                          type="file"
-                          multiple
-                          accept={MEDIA_ACCEPT_ATTRIBUTE}
-                          className="hidden"
-                          onChange={(event) => {
-                            void attachFiles(draft, event.target.files);
-                            // Cleared so re-picking the same file still fires.
-                            event.target.value = '';
-                          }}
-                          data-testid={`input-media-${draft.id}`}
-                        />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          asChild
-                          disabled={uploadingId === draft.id}
-                        >
-                          <label
-                            htmlFor={`${fileInputPrefix}-${draft.id}`}
-                            className="cursor-pointer"
-                            data-testid={`button-attach-${draft.id}`}
-                          >
-                            {uploadingId === draft.id ? (
-                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <ImagePlus className="mr-2 h-3.5 w-3.5" />
-                            )}
-                            {uploadingId === draft.id ? 'Storing' : 'Attach'}
-                          </label>
-                        </Button>
-                        <span className="text-xs text-muted-foreground">
-                          {draft.media.length}/{network.mediaLimit}
-                          {network.requiresMedia && draft.media.length === 0
-                            ? ` · ${network.label} needs one`
-                            : ''}
-                          {approved && draft.media.length > 0
-                            ? ' · changing these clears the approval'
-                            : ''}
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {draft.status === 'failed' && draft.lastError ? (
-                    <div
-                      className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-                      data-testid={`error-${draft.id}`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span>{draft.lastError}</span>
-                      </div>
-                      {/*
-                        The operator can see the account; this app cannot. When
-                        they have looked and the post is there, the record needs
-                        a way to say so — see `lib/attestation.ts` for why that
-                        is `attested` and never `published`.
-                      */}
-                      <button
-                        type="button"
-                        onClick={() => setAttesting(draft)}
-                        className="text-xs underline underline-offset-2"
-                        data-testid={`button-attest-${draft.id}`}
-                      >
-                        Checked the account — it actually posted
-                      </button>
-                    </div>
-                  ) : null}
-
-                  {draft.status === 'attested' && draft.attestation ? (
-                    <div
-                      className="space-y-2 rounded-md border border-chart-4/40 bg-chart-4/10 p-3 text-sm text-chart-4"
-                      data-testid={`attested-${draft.id}`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span>{describeAttestation(draft)}</span>
-                      </div>
-                      {draft.lastError ? (
-                        <p className="text-xs opacity-80">
-                          What the shell saw at the time: {draft.lastError}
-                        </p>
-                      ) : null}
-                      <div className="flex flex-wrap items-center gap-3">
-                        {draft.attestation.postUrl ? (
-                          <a
-                            href={draft.attestation.postUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 text-xs underline underline-offset-2"
-                            data-testid={`link-attested-${draft.id}`}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            The link you gave
-                          </a>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => retractAttestation(draft)}
-                          className="text-xs underline underline-offset-2"
-                          data-testid={`button-retract-${draft.id}`}
-                        >
-                          Take that back
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {draft.status === 'published' && draft.postUrl ? (
-                    <a
-                      href={draft.postUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-chart-2 underline underline-offset-2"
-                      data-testid={`link-post-${draft.id}`}
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      View it on {network.label}
-                    </a>
-                  ) : null}
-
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Checkbox
-                            id={`immediate-${draft.id}`}
-                            checked={immediate}
-                            disabled={locked}
-                            onCheckedChange={(checked) =>
-                              setImmediate(draft, checked === true)
-                            }
-                            data-testid={`checkbox-immediate-${draft.id}`}
-                          />
-                          <Label
-                            htmlFor={`immediate-${draft.id}`}
-                            className="text-xs font-normal"
-                          >
-                            Post immediately
-                          </Label>
-                        </div>
-
-                        {!immediate ? (
-                          <div className="space-y-1">
-                            <Label
-                              htmlFor={`schedule-${draft.id}`}
-                              className="text-xs text-muted-foreground"
-                            >
-                              Send at
-                            </Label>
-                            <Input
-                              id={`schedule-${draft.id}`}
-                              type="datetime-local"
-                              disabled={locked}
-                              value={toLocalInputValue(draft.scheduledFor)}
-                              onChange={(event) =>
-                                schedule(draft, event.target.value)
-                              }
-                              className="h-9 w-[210px]"
-                              data-testid={`input-schedule-${draft.id}`}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                      <span
-                        className={cn(
-                          'pb-2 text-xs tabular-nums',
-                          overLimit
-                            ? 'font-medium text-destructive'
-                            : 'text-muted-foreground',
-                        )}
-                      >
-                        {draft.body.length} / {network.charLimit}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {!locked ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeDraft(draft)}
-                          data-testid={`button-delete-${draft.id}`}
-                        >
-                          <Trash2 className="mr-2 h-3.5 w-3.5" />
-                          Discard
-                        </Button>
-                      ) : null}
-
-                      {!approved && draft.status !== 'published' ? (
-                        <Button
-                          size="sm"
-                          disabled={overLimit || locked || operator === null}
-                          title={
-                            operator === null
-                              ? 'Set your approver name in Settings first'
-                              : undefined
-                          }
-                          onClick={() => approve(draft)}
-                          data-testid={`button-approve-${draft.id}`}
-                        >
-                          <BadgeCheck className="mr-2 h-3.5 w-3.5" />
-                          Approve
-                        </Button>
-                      ) : null}
-
-                      {approved && draft.status !== 'published' ? (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => revokeApproval(draft)}
-                            disabled={isSending}
-                            data-testid={`button-revoke-${draft.id}`}
-                          >
-                            <RotateCcw className="mr-2 h-3.5 w-3.5" />
-                            Revoke
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={overLimit || isSending || needsMedia}
-                            title={
-                              needsMedia
-                                ? `${network.label} needs an image or video`
-                                : undefined
-                            }
-                            onClick={() => requestPublish(draft)}
-                            data-testid={`button-publish-${draft.id}`}
-                          >
-                            {isSending ? (
-                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Send className="mr-2 h-3.5 w-3.5" />
-                            )}
-                            {isSending ? 'Posting' : `Post to ${network.label}`}
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {immediate && approved && draft.status !== 'published' ? (
-                    <>
-                      <Separator />
-                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Send className="h-3.5 w-3.5" />
-                        No time set: this goes out when you press Post to{' '}
-                        {network.label}, and not before. Tick the box off to
-                        give it a time instead.
-                      </p>
-                    </>
-                  ) : null}
-
-                  {draft.status === 'scheduled' && draft.scheduledFor ? (
-                    <>
-                      <Separator />
-                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <CalendarClock className="h-3.5 w-3.5" />
-                        Goes out on its own at{' '}
-                        {formatDateTime(draft.scheduledFor)}, through this
-                        workspace's session and under this approval. Edit the
-                        text and the approval drops, so it stays put. One
-                        attempt per time you set: if it fails, the reason lands
-                        here rather than a silent retry — set a new time to try
-                        again.
-                      </p>
-                    </>
-                  ) : null}
-                </CardContent>
-              </Card>
-            );
-          })}
+                <div className="flex flex-col gap-3">
+                  {row.drafts.map((draft) => renderDraftCard(draft))}
+                </div>
+              </div>
+            ),
+          )}
         </div>
       )}
 
