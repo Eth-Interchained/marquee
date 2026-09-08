@@ -11,6 +11,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   BRIDGE_VERSION,
   CHANNELS,
+  type CaptureSelection,
+  type CaptureSource,
   type Rect,
   type SurfaceAttachResult,
   type SurfaceOptions,
@@ -31,6 +33,9 @@ const host = {
     ipcRenderer.invoke(CHANNELS.tabOpen, { workspaceId, url }),
   sessionStatus: (workspaceId: string): Promise<unknown> =>
     ipcRenderer.invoke(CHANNELS.sessionStatus, { workspaceId }),
+  captureSources: (): Promise<CaptureSource[]> => ipcRenderer.invoke(CHANNELS.captureSources),
+  captureSelect: (selection: CaptureSelection | null): Promise<void> =>
+    ipcRenderer.invoke(CHANNELS.captureSelect, { selection }),
 };
 
 contextBridge.exposeInMainWorld("__uaShellHost", host);

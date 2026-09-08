@@ -92,6 +92,7 @@ owner, not a refactor.
 ```
 artifacts/
   ua-social-browser/   React + Vite workspace UI (the sidebar app)
+    src/lib/studio/    Studio compositor: scene graph, canvas renderer, capture, mixer (pure, tested; from Eth-Interchained/marquee)
   api-server/          Express API: state, AI, scheduling, publish gateway
   mockup-sandbox/      Replit-only component preview surface; not part of the product
 desktop/
@@ -119,6 +120,7 @@ scripts/               template leftover
 | `src/ua-metadata.ts` | UA string → headers, client hints, timezone (all derived, never invented) |
 | `src/ui-server.ts`, `src/preload/` | The privileged loopback origin and its gate; also proxies `/runtime/*` (HTTP + WebSocket upgrades) to the Python runtime, adding its token |
 | `src/python-runtime.ts` | Starts the bundled Python through Jenny's verbatim orchestrator; mints nothing itself, wraps the token env-window and the real-PATH fix around it (see `.agents/memory/python-runtime.md`) |
+| `src/capture.ts` | Studio screen capture: lists `desktopCapturer` sources for the UI's picker and answers `getDisplayMedia()` on the default session with the ONE source the UI armed — never a guess (see `.agents/memory/studio-capture.md`) |
 | `src/session-bridge-server.ts` | Loopback HTTP the API server calls; token-gated |
 | `src/publisher/index.ts` | `sessionStatus`, `publish`, `beginSignIn` |
 | `src/publisher/adapters.ts` | Per-network cookies, composer config, sign-in URL, refusal reasons |

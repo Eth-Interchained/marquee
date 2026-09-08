@@ -38,6 +38,22 @@ export type ShellSurfaceHandle = {
   close(): Promise<void>;
 };
 
+/** A screen or window the Studio may capture. Mirrors `CaptureSource` in the shell's ipc.ts. */
+export type ShellCaptureSource = {
+  id: string;
+  name: string;
+  kind: 'screen' | 'window';
+  /** data: URL thumbnail. */
+  thumbnail: string;
+  appIcon: string | null;
+};
+
+export type ShellCaptureSelection = {
+  sourceId: string;
+  /** System-audio loopback. Only Windows honours it; the shell says which. */
+  withAudio: boolean;
+};
+
 export type UAShellBridge = {
   readonly version: string;
   /** Mounts a workspace-isolated browsing surface into the given element. */
@@ -48,6 +64,15 @@ export type UAShellBridge = {
   /** Opens the platform in a normal workspace tab. */
   openInWorkspaceTab(workspaceId: string, url: string): Promise<void>;
   getSessionStatus(workspaceId: string): Promise<ShellSessionStatus>;
+  /**
+   * Studio capture. Absent on shells older than this contract — check before
+   * use, and fall back to the browser's own getDisplayMedia() picker.
+   */
+  studio?: {
+    listCaptureSources(): Promise<ShellCaptureSource[]>;
+    /** Arms the shell's display-media handler for the NEXT getDisplayMedia(). `null` disarms. */
+    selectCaptureSource(selection: ShellCaptureSelection | null): Promise<void>;
+  };
 };
 
 declare global {

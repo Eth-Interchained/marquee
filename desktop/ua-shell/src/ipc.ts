@@ -19,7 +19,34 @@ export const CHANNELS = {
   sessionStatus: "ua-shell:session:status",
   chromeState: "ua-shell:chrome:state",
   chromeCommand: "ua-shell:chrome:command",
+  /** Studio: enumerate screens/windows the operator may capture. */
+  captureSources: "ua-shell:capture:sources",
+  /** Studio: choose which one the NEXT getDisplayMedia() call receives. */
+  captureSelect: "ua-shell:capture:select",
 } as const;
+
+/**
+ * A screen or window offered to the Studio's picker. `id` is Electron's
+ * desktopCapturer id (`screen:0:0`, `window:1234:0`); the thumbnail is a data
+ * URL small enough to cross IPC without ceremony.
+ */
+export type CaptureSource = {
+  id: string;
+  name: string;
+  kind: "screen" | "window";
+  thumbnail: string;
+  /** Present for windows that belong to an app with an icon. */
+  appIcon: string | null;
+};
+
+export type CaptureSelection = {
+  sourceId: string;
+  /**
+   * Ask Chromium for system-audio loopback with the video. Only Windows can
+   * honour this; elsewhere the handler leaves audio out and the UI says so.
+   */
+  withAudio: boolean;
+};
 
 /** Version reported as `window.uaShell.version`. */
 export const BRIDGE_VERSION = "1.0.0";

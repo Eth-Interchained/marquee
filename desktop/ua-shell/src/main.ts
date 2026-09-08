@@ -23,6 +23,7 @@ import { freeLoopbackPort } from "./net";
 import { startSessionBridge, type SessionBridgeHandle } from "./session-bridge-server";
 import { startWorkspaceUiServer, SHELL_COOKIE_NAME, type UiServerHandle } from "./ui-server";
 import { startPythonRuntime, type PythonRuntimeHandle } from "./python-runtime";
+import { CaptureBroker } from "./capture";
 import {
   reclaimOrphanedApiServer,
   startApiServer,
@@ -35,6 +36,7 @@ import { writePairingFileAt } from "./pairing-file";
 import { ShellWindow } from "./shell-window";
 import {
   CHANNELS,
+  type CaptureSelection,
   type ChromeCommand,
   type Rect,
   type ShellSessionStatus,
@@ -255,7 +257,14 @@ async function bootstrap(): Promise<void> {
 
   shellWindow = window;
 
-  registerBridgeIpc(window, publisher.sessionStatus);
+  // Studio screen capture: the privileged view runs in the default session,
+  // so that is where getDisplayMedia() must be answered. Without this handler
+  // the call simply fails; with it, only an explicitly picked source is ever
+  // handed out, and only once.
+  const capture = new CaptureBroker();
+  capture.install(session.defaultSession);
+
+  registerBridgeIpc(window, publisher.sessionStatus, capture);
 
   const refreshTimer = setInterval(() => {
     void directory.refresh().then(() => window.publishChromeState());
@@ -306,6 +315,7 @@ function registerBridgeIpc(
     handleUnknown?: string;
     detail: string;
   }>,
+  capture: CaptureBroker,
 ): void {
   /**
    * Only the privileged view may call these. Page content has no preload and
@@ -362,6 +372,20 @@ function registerBridgeIpc(
       return { workspaceId: payload.workspaceId, ...snapshot };
     },
   );
+
+  ipcMain.handle(CHANNELS.captureSources, async (event) => {
+    privileged(event);
+    return capture.listSources();
+  });
+
+  ipcMain.handle(CHANNELS.captureSelect, (event, payload: { selection: CaptureSelection | null }) => {
+    privileged(event);
+    const selection = payload?.selection ?? null;
+    if (selection !== null && (typeof selection.sourceId !== "string" || typeof selection.withAudio !== "boolean")) {
+      throw new Error("captureSelect: selection must be { sourceId: string, withAudio: boolean } or null.");
+    }
+    capture.select(selection);
+  });
 
   ipcMain.on(CHANNELS.chromeCommand, (_event, command: ChromeCommand) => {
     window.handleChromeCommand(command);

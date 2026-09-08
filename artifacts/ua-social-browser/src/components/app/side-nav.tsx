@@ -9,6 +9,7 @@ import {
   Users,
   Fingerprint,
   SquareTerminal,
+  Clapperboard,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -26,6 +27,7 @@ const ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
   { id: 'network', label: 'Network', icon: Globe },
   { id: 'terminal', label: 'Terminal', icon: SquareTerminal },
+  { id: 'studio', label: 'Studio', icon: Clapperboard },
   { id: 'composer', label: 'AI Composer', icon: Sparkles },
   { id: 'drafts', label: 'Review queue', icon: FileText },
   { id: 'calendar', label: 'Plan', icon: CalendarDays },

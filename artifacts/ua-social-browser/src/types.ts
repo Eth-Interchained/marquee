@@ -2,6 +2,7 @@ export type Section =
   | 'dashboard'
   | 'network'
   | 'terminal'
+  | 'studio'
   | 'composer'
   | 'drafts'
   | 'calendar'

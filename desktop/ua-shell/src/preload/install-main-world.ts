@@ -73,6 +73,18 @@ export function installUaShellMainWorld(): boolean {
       host.openInWorkspaceTab(workspaceId, url),
 
     getSessionStatus: (workspaceId: string) => host.sessionStatus(workspaceId),
+
+    /**
+     * Studio capture. Electron has no built-in screen picker: the page lists
+     * sources here, shows its own picker, tells the shell which one it chose,
+     * and only THEN calls getDisplayMedia(), which the shell's display-media
+     * handler resolves with that source. A getDisplayMedia() with no prior
+     * selection is refused by the handler, on purpose.
+     */
+    studio: {
+      listCaptureSources: () => host.captureSources(),
+      selectCaptureSource: (selection: any) => host.captureSelect(selection),
+    },
   };
 
   Object.freeze(uaShell);

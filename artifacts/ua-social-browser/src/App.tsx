@@ -11,6 +11,7 @@ import { useScheduledDispatches } from '@/hooks/use-scheduler';
 import { Dashboard } from '@/sections/dashboard';
 import { Network } from '@/sections/network';
 import { TerminalSection } from '@/sections/terminal';
+import { StudioSection } from '@/sections/studio';
 import { Composer } from '@/sections/composer';
 import { Drafts } from '@/sections/drafts';
 import { Calendar } from '@/sections/calendar';
@@ -180,6 +181,7 @@ function Workbench() {
           {section === 'dashboard' ? <Dashboard {...sectionProps} /> : null}
           {section === 'network' ? <Network {...sectionProps} /> : null}
           {section === 'terminal' ? <TerminalSection {...sectionProps} /> : null}
+          {section === 'studio' ? <StudioSection {...sectionProps} /> : null}
           {section === 'composer' ? <Composer {...sectionProps} /> : null}
           {section === 'drafts' ? (
             <Drafts
