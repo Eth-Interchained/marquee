@@ -14,6 +14,7 @@
  */
 
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -66,6 +67,34 @@ export function resolveStaticPath(rootDir: string, requestPath: string): string 
   return candidate;
 }
 
+/**
+ * The bundled Python runtime, when the shell started one. Reached by the UI
+ * as `/runtime/*` on this origin; the prefix is stripped and the runtime's
+ * capability token is added here, so the page never holds it.
+ */
+export type RuntimeUpstream = {
+  baseUrl: string;
+  token: string;
+};
+
+export const RUNTIME_PREFIX = "/runtime";
+export const RUNTIME_TOKEN_HEADER = "X-UA-Runtime-Token";
+
+/** `/runtime/ws/pty?x=1` → `/ws/pty?x=1&token=…`; null when not a runtime path. */
+export function rewriteRuntimeUrl(url: string, token: string): string | null {
+  if (url !== RUNTIME_PREFIX && !url.startsWith(`${RUNTIME_PREFIX}/`)) return null;
+  const stripped = url.slice(RUNTIME_PREFIX.length) || "/";
+  // The runtime authenticates WebSocket handshakes by query string because a
+  // browser cannot set headers on an upgrade. Any inbound `token` is dropped:
+  // only this proxy may supply it.
+  const [pathname, query = ""] = stripped.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.delete("token");
+  if (pathname.startsWith("/ws/")) params.set("token", token);
+  const search = params.toString();
+  return search ? `${pathname}?${search}` : pathname;
+}
+
 export async function startWorkspaceUiServer(options: {
   rootDir: string;
   apiBaseUrl: string;
@@ -76,9 +105,12 @@ export async function startWorkspaceUiServer(options: {
    * its own value through.
    */
   apiAccessToken: string;
+  /** Present only when the shell has a Python runtime up. */
+  runtime?: RuntimeUpstream | null;
   port?: number;
 }): Promise<UiServerHandle> {
   const { rootDir, apiBaseUrl, token, apiAccessToken } = options;
+  const runtime = options.runtime ?? null;
 
   const server = http.createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
@@ -88,6 +120,73 @@ export async function startWorkspaceUiServer(options: {
       }
       response.end(detail);
     });
+  });
+
+  /**
+   * Upgraded sockets leave the HTTP server's own connection tracking, so
+   * `server.close()` would wait on them forever. They are tracked here and
+   * torn down explicitly in `close()`.
+   */
+  const spliced = new Set<{ destroy(): void }>();
+
+  /**
+   * WebSocket upgrades for the runtime (`/runtime/ws/*`). The same cookie gate
+   * as every other request, then a raw TCP splice to the runtime with the
+   * request head rewritten: prefix stripped, token added, cookie dropped.
+   * Nothing else on this origin upgrades, so anything else is closed.
+   */
+  server.on("upgrade", (request, socket, head) => {
+    const url = request.url ?? "/";
+    const refuse = (status: number, reason: string) => {
+      socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n${reason}`);
+      socket.destroy();
+    };
+    if (readCookie(request.headers.cookie, SHELL_COOKIE_NAME) !== token) {
+      refuse(403, "This surface is only reachable from the shell's privileged view.");
+      return;
+    }
+    if (!runtime) {
+      refuse(503, "The shell has no Python runtime running, so there is nothing to upgrade to.");
+      return;
+    }
+    const target = rewriteRuntimeUrl(url, runtime.token);
+    if (!target || !target.startsWith("/ws/")) {
+      refuse(404, `No WebSocket endpoint at ${url}; runtime sockets live under ${RUNTIME_PREFIX}/ws/.`);
+      return;
+    }
+    const upstreamUrl = new URL(runtime.baseUrl);
+    const upstream = net.connect(Number(upstreamUrl.port), upstreamUrl.hostname);
+    spliced.add(socket);
+    spliced.add(upstream);
+    const forget = () => {
+      spliced.delete(socket);
+      spliced.delete(upstream);
+    };
+    socket.once("close", forget);
+    upstream.once("close", forget);
+    upstream.once("connect", () => {
+      const lines = [`${request.method ?? "GET"} ${target} HTTP/1.1`];
+      for (const [key, value] of Object.entries(request.headers)) {
+        if (value === undefined) continue;
+        const lower = key.toLowerCase();
+        if (lower === "cookie" || lower === RUNTIME_TOKEN_HEADER.toLowerCase()) continue;
+        if (lower === "host") {
+          lines.push(`Host: ${upstreamUrl.host}`);
+          continue;
+        }
+        lines.push(`${key}: ${Array.isArray(value) ? value.join(", ") : value}`);
+      }
+      upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(socket);
+      socket.pipe(upstream);
+    });
+    upstream.once("error", (error) => {
+      refuse(502, `The Python runtime refused the socket: ${error.message}`);
+    });
+    socket.once("error", () => upstream.destroy());
+    socket.once("close", () => upstream.destroy());
+    upstream.once("close", () => socket.destroy());
   });
 
   async function handle(
@@ -107,7 +206,71 @@ export async function startWorkspaceUiServer(options: {
       return;
     }
 
+    if (url === RUNTIME_PREFIX || url.startsWith(`${RUNTIME_PREFIX}/`)) {
+      await proxyToRuntime(request, response, url);
+      return;
+    }
+
     await serveStatic(request, response, url);
+  }
+
+  async function proxyToRuntime(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    url: string,
+  ): Promise<void> {
+    if (!runtime) {
+      response.writeHead(503, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(
+        JSON.stringify({
+          error: "runtime_unavailable",
+          detail: "The shell has no Python runtime running. It failed to start, or this is the web development surface, which has no shell.",
+        }),
+      );
+      return;
+    }
+    const target = rewriteRuntimeUrl(url, runtime.token);
+    if (!target) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(request.headers)) {
+      if (value === undefined) continue;
+      const lower = key.toLowerCase();
+      if (["host", "connection", "cookie", "content-length", RUNTIME_TOKEN_HEADER.toLowerCase()].includes(lower)) continue;
+      headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+    }
+    headers.set(RUNTIME_TOKEN_HEADER, runtime.token);
+
+    const method = request.method ?? "GET";
+    const hasBody = method !== "GET" && method !== "HEAD";
+    const body = hasBody ? Uint8Array.from(await readRequestBody(request)) : undefined;
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${runtime.baseUrl.replace(/\/+$/, "")}${target}`, { method, headers, body });
+    } catch (error) {
+      response.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(
+        JSON.stringify({
+          error: "runtime_unreachable",
+          detail: `The Python runtime at ${runtime.baseUrl} did not answer: ${error instanceof Error ? error.message : String(error)}. It may be restarting after a failed health check.`,
+        }),
+      );
+      return;
+    }
+
+    const outHeaders: Record<string, string> = {};
+    upstream.headers.forEach((value, key) => {
+      if (["content-encoding", "content-length", "transfer-encoding"].includes(key)) return;
+      outHeaders[key] = value;
+    });
+    const payload = Buffer.from(await upstream.arrayBuffer());
+    outHeaders["content-length"] = String(payload.byteLength);
+    response.writeHead(upstream.status, outHeaders);
+    response.end(payload);
   }
 
   async function proxyToApi(
@@ -208,6 +371,8 @@ export async function startWorkspaceUiServer(options: {
         }
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections();
+        for (const s of spliced) s.destroy();
+        spliced.clear();
       }),
   };
 }

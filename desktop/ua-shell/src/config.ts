@@ -33,6 +33,14 @@ export type ShellConfig = {
   dataDir: string;
   /** Where the per-workspace Chromium profiles live. */
   userDataDir: string;
+  /**
+   * The bundled Python runtime (desktop/py-runtime, supervised by Jenny's
+   * orchestrator). `backendDir` holds app.py in a checkout; a packaged build
+   * carries the PyInstaller bundle under resources/python and Jenny finds it
+   * there itself. `enabled: false` (UA_PY_RUNTIME=0) starts the shell without
+   * a terminal rather than failing.
+   */
+  pythonRuntime: { enabled: boolean; backendDir: string };
 };
 
 function env(name: string): string | null {
@@ -80,6 +88,14 @@ export function resolveConfig(input: {
     bridgePort: Number.isFinite(rawBridgePort) && rawBridgePort >= 0 ? rawBridgePort : 0,
     dataDir: env("NEDB_DATA_DIR") ?? path.join(input.userDataDir, "ledger"),
     userDataDir: input.userDataDir,
+    pythonRuntime: {
+      enabled: env("UA_PY_RUNTIME") !== "0",
+      backendDir:
+        env("UA_PY_RUNTIME_DIR") ??
+        (input.packaged
+          ? path.join(input.resourcesPath, "python")
+          : path.join(repoRoot, "desktop", "py-runtime")),
+    },
   };
 }
 

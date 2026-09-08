@@ -22,6 +22,7 @@ import { createLogger, errorFields } from "./logger";
 import { freeLoopbackPort } from "./net";
 import { startSessionBridge, type SessionBridgeHandle } from "./session-bridge-server";
 import { startWorkspaceUiServer, SHELL_COOKIE_NAME, type UiServerHandle } from "./ui-server";
+import { startPythonRuntime, type PythonRuntimeHandle } from "./python-runtime";
 import {
   reclaimOrphanedApiServer,
   startApiServer,
@@ -47,6 +48,7 @@ const DIRECTORY_REFRESH_MS = 5_000;
 type Running = {
   bridge: SessionBridgeHandle;
   api: ApiServerHandle | null;
+  python: PythonRuntimeHandle | null;
   ui: UiServerHandle | null;
   window: ShellWindow;
   refreshTimer: NodeJS.Timeout;
@@ -174,6 +176,28 @@ async function bootstrap(): Promise<void> {
 
   await directory.refresh();
 
+  // 2b. The bundled Python runtime — the terminal and, later, the studio's
+  // Python-side tools. Supervised by Jenny's orchestrator (vendored verbatim);
+  // gated by a token minted here that only the UI proxy ever presents. A
+  // runtime that cannot start costs the operator the Terminal, not the app:
+  // the UI reports the reason from /runtime/health instead of a blank panel.
+  let python: PythonRuntimeHandle | null = null;
+  if (config.pythonRuntime.enabled) {
+    try {
+      python = await startPythonRuntime({
+        port: await freeLoopbackPort(),
+        token: randomBytes(32).toString("hex"),
+        backendDir: config.pythonRuntime.backendDir,
+        workspaceDir: config.dataDir,
+        packaged: app.isPackaged,
+      });
+    } catch (error) {
+      log.error("Python runtime unavailable; the Terminal section will report this", errorFields(error));
+    }
+  } else {
+    log.info("Python runtime disabled by UA_PY_RUNTIME=0");
+  }
+
   // 3. The privileged origin.
   const token = randomUUID();
   let ui: UiServerHandle | null = null;
@@ -186,6 +210,7 @@ async function bootstrap(): Promise<void> {
       apiBaseUrl,
       token,
       apiAccessToken,
+      runtime: python ? { baseUrl: python.baseUrl, token: python.token } : null,
     });
     workspaceUiUrl = `${ui.origin}/`;
     // The privileged view runs in the default session, so that is where the
@@ -236,11 +261,12 @@ async function bootstrap(): Promise<void> {
     void directory.refresh().then(() => window.publishChromeState());
   }, DIRECTORY_REFRESH_MS);
 
-  running = { bridge, api, ui, window, refreshTimer };
+  running = { bridge, api, python, ui, window, refreshTimer };
 
   log.info("Shell ready", {
     workspaceUiUrl,
     apiBaseUrl,
+    pythonRuntime: python ? python.baseUrl : "unavailable",
     bridgeUrl: bridge.url,
     profiles: path.join(config.userDataDir, "Partitions"),
   });
@@ -351,6 +377,9 @@ async function shutdown(): Promise<void> {
   await current.ui?.close().catch(() => undefined);
   await current.bridge.close().catch(() => undefined);
   await current.api?.stop().catch(() => undefined);
+  await current.python?.stop().catch((error: unknown) =>
+    log.warn("Python runtime did not stop cleanly", errorFields(error)),
+  );
 }
 
 function fatal(error: unknown): void {

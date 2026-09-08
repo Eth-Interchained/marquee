@@ -96,6 +96,9 @@ artifacts/
   mockup-sandbox/      Replit-only component preview surface; not part of the product
 desktop/
   ua-shell/            Electron shell: the actual browser and the only publisher
+    vendor/jenny/      Jenny's Python orchestrator, copied VERBATIM (sha256 pinned) — never edit
+    vendor/keystone-lite/  shell-path.ts, verbatim: real user PATH for a GUI-launched app
+  py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY)
 lib/
   api-spec/            openapi.yaml — the contract, and the codegen entrypoint
   api-zod/             generated zod schemas (do not hand-edit)
@@ -114,7 +117,8 @@ scripts/               template leftover
 | `src/shell-window.ts` | `BaseWindow` + `WebContentsView`s: toolbar, privileged UI, surfaces, tabs |
 | `src/workspace-contexts.ts`, `src/partition.ts` | Per-workspace sessions and their keys |
 | `src/ua-metadata.ts` | UA string → headers, client hints, timezone (all derived, never invented) |
-| `src/ui-server.ts`, `src/preload/` | The privileged loopback origin and its gate |
+| `src/ui-server.ts`, `src/preload/` | The privileged loopback origin and its gate; also proxies `/runtime/*` (HTTP + WebSocket upgrades) to the Python runtime, adding its token |
+| `src/python-runtime.ts` | Starts the bundled Python through Jenny's verbatim orchestrator; mints nothing itself, wraps the token env-window and the real-PATH fix around it (see `.agents/memory/python-runtime.md`) |
 | `src/session-bridge-server.ts` | Loopback HTTP the API server calls; token-gated |
 | `src/publisher/index.ts` | `sessionStatus`, `publish`, `beginSignIn` |
 | `src/publisher/adapters.ts` | Per-network cookies, composer config, sign-in URL, refusal reasons |

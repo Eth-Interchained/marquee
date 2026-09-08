@@ -21,6 +21,7 @@ function config(apiServer: ShellConfig["apiServer"]): ShellConfig {
     bridgePort: 0,
     dataDir: path.join(dir, "ledger"),
     userDataDir: dir,
+    pythonRuntime: { enabled: false, backendDir: path.join(dir, "py-runtime") },
   };
 }
 

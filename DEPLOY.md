@@ -89,6 +89,12 @@ Read by the native shell only (`desktop/ua-shell`):
 | `UA_API_SERVER_URL` | no | unset | Use an already-running API server instead of spawning one. That server only publishes if it was itself started with `UA_SESSION_BRIDGE_URL`. |
 | `UA_SHELL_BRIDGE_PORT` | no | `0` (OS-assigned) | Fix the session bridge port when an externally-run API server needs a stable `UA_SESSION_BRIDGE_URL`. |
 | `UA_SHELL_PAIRING_FILE` | no | unset | Path to write the bridge address **and its capability token** for an API server you start yourself. Owner-readable only, and off by default. Delete the file once the API server has read it. |
+| `UA_PY_RUNTIME` | no | `1` | `0` starts the shell without the bundled Python runtime (and therefore without the Terminal). A runtime that fails to start never blocks the shell; the Terminal section shows the reason. |
+| `UA_PY_RUNTIME_DIR` | no | `desktop/py-runtime` (checkout) / `resources/python` (packaged) | Where `app.py` lives in development, or where the PyInstaller bundle lives in a packaged build. Jenny's `findPythonExe` locates the executable under it. |
+
+The shell also sets `UA_PY_RUNTIME_TOKEN` and `JENNY_PORT` for the Python
+runtime it spawns — the token only for the instant of the spawn, so no other
+child inherits it. Do not set either by hand.
 
 The shell sets `UA_SESSION_BRIDGE_URL`, `UA_SESSION_BRIDGE_TOKEN`, `PORT` and
 `NEDB_DATA_DIR` for the API server it spawns; do not set those for it by hand.
@@ -144,8 +150,17 @@ pnpm install
 PORT=5173 BASE_PATH=/ pnpm --filter @workspace/ua-social-browser run build
 pnpm --filter @workspace/api-server run build
 
+# the bundled Python (the Terminal). Once per checkout; the shell finds .venv itself.
+(cd desktop/py-runtime && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
+
 pnpm --filter @workspace/ua-shell run start   # builds, then launches Electron
 ```
+
+Without the venv the shell still starts; the Terminal section reports that the
+runtime did not come up and names the interpreter it tried. Packaged builds
+carry Python inside the app (PyInstaller `--onedir` under `resources/python`,
+Jenny's recipe — `desktop/ua-shell/vendor/jenny/README.md`), so end users need
+no Python installed.
 
 The UI build needs `PORT` and `BASE_PATH=/`: its Vite config reads both, and the
 shell serves the bundle from the root of its own origin.

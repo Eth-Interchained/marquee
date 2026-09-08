@@ -10,6 +10,7 @@ import { useBrowserState } from '@/hooks/use-browser-state';
 import { useScheduledDispatches } from '@/hooks/use-scheduler';
 import { Dashboard } from '@/sections/dashboard';
 import { Network } from '@/sections/network';
+import { TerminalSection } from '@/sections/terminal';
 import { Composer } from '@/sections/composer';
 import { Drafts } from '@/sections/drafts';
 import { Calendar } from '@/sections/calendar';
@@ -178,6 +179,7 @@ function Workbench() {
         <main className="min-w-0 flex-1 overflow-y-auto">
           {section === 'dashboard' ? <Dashboard {...sectionProps} /> : null}
           {section === 'network' ? <Network {...sectionProps} /> : null}
+          {section === 'terminal' ? <TerminalSection {...sectionProps} /> : null}
           {section === 'composer' ? <Composer {...sectionProps} /> : null}
           {section === 'drafts' ? (
             <Drafts

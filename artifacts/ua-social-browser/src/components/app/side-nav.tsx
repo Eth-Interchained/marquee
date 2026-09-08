@@ -8,6 +8,7 @@ import {
   Sparkles,
   Users,
   Fingerprint,
+  SquareTerminal,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -24,6 +25,7 @@ type NavItem = {
 const ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
   { id: 'network', label: 'Network', icon: Globe },
+  { id: 'terminal', label: 'Terminal', icon: SquareTerminal },
   { id: 'composer', label: 'AI Composer', icon: Sparkles },
   { id: 'drafts', label: 'Review queue', icon: FileText },
   { id: 'calendar', label: 'Plan', icon: CalendarDays },
