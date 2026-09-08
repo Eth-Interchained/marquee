@@ -334,6 +334,38 @@ retry after a network stall cannot double-post. The shell keeps the spent keys i
 went out, and a post whose outcome could not be confirmed. "Not signed in" is not
 terminal — the operator signs in and the same approved draft goes out.
 
+## 5b. Go Live ingest (mediamtx)
+
+The Studio sends ONE WebRTC stream (WHIP) to a mediamtx you run; mediamtx serves
+viewers (HLS on :8888, WebRTC/WHEP on :8889) and, when enabled, fans out to
+RTMP destinations. Single Go binary, no root, no /etc footprint — run it in a
+tmux session from your home directory like nedbd:
+
+```bash
+curl -sSL -o mediamtx.tgz https://github.com/bluenviron/mediamtx/releases/download/v1.21.0/mediamtx_v1.21.0_linux_amd64.tar.gz
+tar xzf mediamtx.tgz
+cp <checkout>/deploy/mediamtx/mediamtx.yml .
+# EDIT: authInternalUsers → marquee password; webrtcAdditionalHosts → ['<VPS public IP>']
+./mediamtx ./mediamtx.yml
+```
+
+In the Studio: Ingest host `https://<grey-cloud-host-or-ip>`, path `marquee/<you>`,
+user `marquee`, the password from the yml. The Studio sends **Basic** auth —
+verified against v1.21.0: a bare `Bearer <password>` is refused (401).
+
+Firewall: TCP 8889 (WHIP/WHEP), TCP 8888 (HLS), **UDP 8189 (ICE media)**,
+TCP 1935 only if you want OBS-style RTMP in. WebRTC media cannot ride
+Cloudflare's orange cloud — put the ingest hostname on a grey-cloud record or use
+the IP. If a creator's NAT is hostile, add a TURN server to `webrtcICEServers2`
+(coturn is free).
+
+Verified in the sandbox against the real binary with a real WebRTC stack: WHIP
+`POST` → 201 + `Location` + SDP answer (H264/opus); bad/no credentials → 401;
+ICE connected and the session reached `publish`; DELETE → 200 ends it. **With
+`webrtcAdditionalHosts` empty, ICE never connects** ("deadline exceeded while
+waiting connection") — that line is the one that matters. Real frames and HLS
+segments are proven only by a live publish from the Studio.
+
 ## 6. Scheduled dispatch
 
 An approved draft with a send time goes out on its own, without the app being

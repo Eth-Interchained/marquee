@@ -1,0 +1,82 @@
+# mediamtx for the Studio's Go Live — the ONE upstream from a creator's machine.
+#
+# Publish:  WHIP  → http(s)://<host>:8889/marquee/<handle>/whip   (bearer-gated, see below)
+# Watch:    HLS   → http(s)://<host>:8888/marquee/<handle>/index.m3u8
+#           WebRTC→ http(s)://<host>:8889/marquee/<handle>          (WHEP, low latency)
+# Fan-out:  RTMP to Twitch/YouTube/Kick — see runOnReady below (step 4, off by default).
+#
+# Runs in a tmux session, home-dir only, like nedbd:  ./mediamtx ./mediamtx.yml
+#
+# Cloudflare: WebRTC MEDIA (UDP 8189) cannot ride the orange cloud. Put the
+# ingest host on a grey-cloud DNS record, or point at the VPS IP directly. The
+# WHIP HTTP handshake itself is fine behind the proxy; the media is not.
+
+logLevel: info
+logDestinations: [stdout]
+
+# ── auth ────────────────────────────────────────────────────────────────────
+# Internal users. VERIFIED against v1.21.0: the publisher must present
+# `Authorization: Basic base64(user:pass)` — or `Bearer user:pass` — a bare
+# `Bearer <pass>` is refused (401), and ?user=&pass= query auth is refused for
+# WHIP. The Studio sends Basic. Readers are open on this prefix; tighten later.
+authMethod: internal
+authInternalUsers:
+  # anyone may WATCH
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: read
+      - action: playback
+  # only the Studio may PUBLISH. CHANGE THIS PASSWORD.
+  - user: marquee
+    pass: change-me-before-going-live
+    ips: []
+    permissions:
+      - action: publish
+        path: ~^marquee/.*$
+  # local operator (tmux) may use the API and metrics
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# ── listeners ───────────────────────────────────────────────────────────────
+api: true
+apiAddress: 127.0.0.1:9997   # loopback only
+
+rtsp: false
+rtmp: true                    # inbound RTMP too, for OBS users who insist
+rtmpAddress: :1935
+
+hls: true
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAlwaysRemux: true
+
+webrtc: true
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+# REQUIRED: the VPS public IP (or a grey-cloud DNS name). With this empty, the
+# WHIP handshake succeeds and then ICE times out ("deadline exceeded while
+# waiting connection") because no reachable candidate was ever advertised.
+webrtcAdditionalHosts: []
+webrtcICEServers2: []
+
+srt: false
+
+# ── paths ───────────────────────────────────────────────────────────────────
+paths:
+  ~^marquee/.*$:
+    # step 4 — RTMP fan-out. Uncomment and fill keys. One ffmpeg per destination
+    # is the plain version; a single `-f tee` muxer is the frugal one.
+    # runOnReady: >
+    #   ffmpeg -i rtsp://127.0.0.1:8554/$MTX_PATH -c copy -f flv rtmp://live.twitch.tv/app/$TWITCH_KEY
+    # runOnReadyRestart: yes
+  all_others:

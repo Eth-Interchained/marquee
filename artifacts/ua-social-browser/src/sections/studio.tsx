@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppWindow, Camera, Clapperboard, Mic, Monitor, MonitorUp, Volume2, X } from 'lucide-react';
+import { AppWindow, Camera, Clapperboard, Mic, Monitor, MonitorUp, Radio, Square, Volume2, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,8 @@ import { getShell, type ShellCaptureSource } from '@/lib/shell-bridge';
 import { Mixer } from '@/lib/studio/audio.ts';
 import { captureCamera, captureMic, captureScreen, stopStream, videoFor, type CaptureError } from '@/lib/studio/capture.ts';
 import { Compositor } from '@/lib/studio/compositor.ts';
+import { viewerUrls, WhipPublisher, type WhipState } from '@/lib/studio/whip.ts';
+import { Input } from '@/components/ui/input';
 import {
   bringToFront,
   defaultScene,
@@ -82,13 +84,79 @@ export function StudioSection({ workspace }: SectionProps) {
   });
   const [withSystemAudio, setWithSystemAudio] = useState(true);
 
-  const shell = getShell();
-  const shellPicker = Boolean(shell?.studio);
-
   const notify = useCallback((level: Notice['level'], text: string, raw?: string) => {
     setNotices((prev) => [{ level, text, raw, at: Date.now() }, ...prev].slice(0, 6));
     if (level === 'error') console.error(`[studio] ${text}${raw ? ` — ${raw}` : ''}`);
   }, []);
+
+  // Go Live — one WHIP upstream to mediamtx. Settings persist per browser so
+  // the operator does not retype the ingest host every session. The password
+  // is kept in sessionStorage only: it leaves with the tab.
+  const LIVE_KEY = 'ua-studio-live';
+  const [live, setLive] = useState<{ base: string; path: string; user: string; pass: string }>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LIVE_KEY) ?? '{}') as Partial<{ base: string; path: string; user: string }>;
+      return {
+        base: saved.base ?? '',
+        path: saved.path ?? `marquee/${workspace.accountHandle || 'me'}`.replace(/^@/, ''),
+        user: saved.user ?? 'marquee',
+        pass: sessionStorage.getItem(`${LIVE_KEY}:pass`) ?? '',
+      };
+    } catch {
+      return { base: '', path: 'marquee/me', user: 'marquee', pass: '' };
+    }
+  });
+  const [whip, setWhip] = useState<WhipState>({ kind: 'idle' });
+  const publisherRef = useRef<WhipPublisher | null>(null);
+  const saveLive = (next: typeof live) => {
+    setLive(next);
+    localStorage.setItem(LIVE_KEY, JSON.stringify({ base: next.base, path: next.path, user: next.user }));
+    sessionStorage.setItem(`${LIVE_KEY}:pass`, next.pass);
+  };
+  const whipEndpoint = live.base ? `${live.base.replace(/\/+$/, '')}:8889/${live.path.replace(/^\/+|\/+$/g, '')}/whip` : '';
+  const viewer = live.base ? viewerUrls(live.base, live.path) : null;
+
+  const goLive = useCallback(async () => {
+    const comp = compositorRef.current;
+    if (!comp) return;
+    if (!live.base) {
+      notify('error', 'Set the ingest host first (e.g. https://live.example.com — mediamtx on your VPS).');
+      return;
+    }
+    const stream = comp.captureStream(30);
+    const mixed = mixerRef.current?.output.getAudioTracks()[0];
+    if (mixed) stream.addTrack(mixed);
+    else notify('warn', 'Going live with video only — add a microphone or share with audio for sound.');
+    const publisher = new WhipPublisher({
+      endpoint: whipEndpoint,
+      auth: live.pass ? { kind: 'basic', user: live.user, pass: live.pass } : { kind: 'none' },
+      maxVideoBitrate: 4_500_000,
+      onState: setWhip,
+    });
+    publisherRef.current = publisher;
+    try {
+      await publisher.start(stream);
+      notify('info', `Live. Viewers: ${viewer?.hls}`);
+    } catch (error) {
+      publisherRef.current = null;
+      notify('error', error instanceof Error ? error.message : String(error));
+    }
+  }, [live, notify, viewer, whipEndpoint]);
+
+  const endLive = useCallback(async () => {
+    const p = publisherRef.current;
+    publisherRef.current = null;
+    await p?.stop();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void publisherRef.current?.stop('section closed');
+    };
+  }, []);
+
+  const shell = getShell();
+  const shellPicker = Boolean(shell?.studio);
 
   // Compositor lifetime = section lifetime.
   useEffect(() => {
@@ -347,6 +415,24 @@ export function StudioSection({ workspace }: SectionProps) {
           <Badge variant="outline" className="font-mono text-[10px]" data-testid="badge-studio-stats">
             {scene.width}×{scene.height} · {fps} fps
           </Badge>
+          {whip.kind === 'live' ? (
+            <Button size="sm" variant="destructive" onClick={() => void endLive()} data-testid="button-end-live">
+              <Square className="mr-1.5 h-3.5 w-3.5" />
+              End stream
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-destructive/60 text-destructive"
+              disabled={whip.kind === 'connecting' || !sources.screen && !sources.camera}
+              onClick={() => void goLive()}
+              data-testid="button-go-live"
+            >
+              <Radio className={cn('mr-1.5 h-3.5 w-3.5', whip.kind === 'connecting' && 'animate-pulse')} />
+              {whip.kind === 'connecting' ? 'Connecting…' : 'Go live'}
+            </Button>
+          )}
           <Button size="sm" onClick={openPicker} data-testid="button-share-screen">
             <MonitorUp className="mr-1.5 h-3.5 w-3.5" />
             {sources.screen ? 'Change screen' : 'Share screen / game'}
@@ -506,6 +592,64 @@ export function StudioSection({ workspace }: SectionProps) {
                   </div>
                 ))
               )}
+            </CardContent>
+          </Card>
+
+          <Card className={cn(whip.kind === 'live' && 'border-destructive/50')}>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Radio className={cn('h-3.5 w-3.5', whip.kind === 'live' && 'text-destructive')} /> Go Live
+                {whip.kind === 'live' ? (
+                  <Badge variant="destructive" className="ml-auto font-mono text-[10px]">
+                    LIVE · {whip.ice}
+                  </Badge>
+                ) : whip.kind === 'connecting' ? (
+                  <Badge variant="outline" className="ml-auto font-mono text-[10px]">connecting</Badge>
+                ) : null}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                One WHIP upstream to your own mediamtx (<code>deploy/mediamtx/mediamtx.yml</code>). It fans out to HLS/WebRTC viewers and, next, RTMP to Twitch/YouTube/Kick.
+              </p>
+              <Label className="text-xs text-muted-foreground">Ingest host</Label>
+              <Input
+                placeholder="https://live.example.com"
+                value={live.base}
+                disabled={whip.kind === 'live' || whip.kind === 'connecting'}
+                onChange={(e) => saveLive({ ...live, base: e.target.value.trim() })}
+                className="h-8 font-mono text-xs"
+                data-testid="input-live-base"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Path</Label>
+                  <Input value={live.path} disabled={whip.kind !== 'idle' && whip.kind !== 'ended' && whip.kind !== 'error'} onChange={(e) => saveLive({ ...live, path: e.target.value.trim() })} className="h-8 font-mono text-xs" />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Publisher user</Label>
+                  <Input value={live.user} disabled={whip.kind === 'live'} onChange={(e) => saveLive({ ...live, user: e.target.value.trim() })} className="h-8 font-mono text-xs" />
+                </div>
+              </div>
+              <Label className="text-xs text-muted-foreground">Publisher password (kept for this session only)</Label>
+              <Input type="password" value={live.pass} disabled={whip.kind === 'live'} onChange={(e) => saveLive({ ...live, pass: e.target.value })} className="h-8 font-mono text-xs" data-testid="input-live-pass" />
+              {whipEndpoint ? (
+                <p className="break-all font-mono text-[10px] text-muted-foreground">POST {whipEndpoint}</p>
+              ) : null}
+              {whip.kind === 'connecting' ? <p className="font-mono text-[10px] text-muted-foreground">{whip.detail}</p> : null}
+              {whip.kind === 'error' ? <p className="rounded-md border-l-2 border-destructive bg-background/40 px-2.5 py-1.5 text-xs">{whip.message}</p> : null}
+              {whip.kind === 'ended' ? <p className="text-xs text-muted-foreground">Stream ended — {whip.reason}.</p> : null}
+              {viewer ? (
+                <div className="mt-1 flex flex-col gap-1 text-[10px]">
+                  <span className="text-muted-foreground">Viewers</span>
+                  <a href={viewer.hls} target="_blank" rel="noopener noreferrer" className="break-all font-mono text-primary underline-offset-2 hover:underline">
+                    {viewer.hls}
+                  </a>
+                  <a href={viewer.webrtc} target="_blank" rel="noopener noreferrer" className="break-all font-mono text-primary underline-offset-2 hover:underline">
+                    {viewer.webrtc}
+                  </a>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

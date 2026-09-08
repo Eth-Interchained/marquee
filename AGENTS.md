@@ -100,6 +100,8 @@ desktop/
     vendor/jenny/      Jenny's Python orchestrator, copied VERBATIM (sha256 pinned) — never edit
     vendor/keystone-lite/  shell-path.ts, verbatim: real user PATH for a GUI-launched app
   py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY)
+deploy/
+  mediamtx/            Go Live ingest config (WHIP in → HLS/WebRTC out; RTMP fan-out commented)
 lib/
   api-spec/            openapi.yaml — the contract, and the codegen entrypoint
   api-zod/             generated zod schemas (do not hand-edit)
