@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppWindow, Camera, Circle, Clapperboard, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
+import { AppWindow, Camera, Circle, Clapperboard, Crosshair, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
 import {
   getGetStudioSceneQueryKey,
   getListStudioEventsQueryKey,
@@ -32,14 +32,19 @@ import { Mixer } from '@/lib/studio/audio.ts';
 import { captureCamera, captureMic, captureScreen, stopStream, videoFor, type CaptureError } from '@/lib/studio/capture.ts';
 import { Compositor } from '@/lib/studio/compositor.ts';
 import {
+  countZooms,
+  fetchZoomPlan,
   finaliseToMp4,
   formatBytes,
   formatElapsed,
   pickRecordingFormat,
   RecordingSession,
+  renderZoomedEdit,
   type FinaliseResult,
   type RecorderState,
   type RecordingFormat,
+  type ZoomPlanResult,
+  type ZoomRenderResult,
 } from '@/lib/studio/recorder.ts';
 import { viewerUrls, WhipPublisher, type WhipState } from '@/lib/studio/whip.ts';
 import { Input } from '@/components/ui/input';
@@ -337,7 +342,17 @@ export function StudioSection({ workspace }: SectionProps) {
     return pickRecordingFormat((type) => MediaRecorder.isTypeSupported(type));
   }, []);
   const [recState, setRecState] = useState<RecorderState>({ kind: 'idle' });
-  const [take, setTake] = useState<{ path: string; bytes: number; durationMs: number; mp4: FinaliseResult | null } | null>(null);
+  const [take, setTake] = useState<{
+    path: string;
+    bytes: number;
+    durationMs: number;
+    mp4: FinaliseResult | null;
+    /** The cursor track beside it, when there was one. Null means no zoom pass. */
+    cursorTrack: string | null;
+    zoom: ZoomRenderResult | null;
+  } | null>(null);
+  const [zoomPlan, setZoomPlan] = useState<ZoomPlanResult | null>(null);
+  const [zooming, setZooming] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -467,6 +482,64 @@ export function StudioSection({ workspace }: SectionProps) {
     [notify, record],
   );
 
+  /**
+   * Render the zoomed edit. Separate from finalising, and slower by orders of
+   * magnitude: the MP4 pass copies the video stream, this one re-encodes every
+   * frame. The operator is told the cost before it starts rather than left
+   * watching a spinner.
+   */
+  const renderZoom = useCallback(
+    async (source: string, cursorTrack: string, cause: string | null) => {
+      setZooming(true);
+      const startedAt = Date.now();
+      try {
+        const result = await renderZoomedEdit(source, cursorTrack, {
+          // The DELIVERY size. Cropping 1920x1080 out of a native capture is a
+          // zoom at full sharpness; encoding the source size back out would
+          // cost far more for pixels no viewer asked for.
+          outWidth: 1920,
+          outHeight: 1080,
+        });
+        setTake((t) => (t ? { ...t, zoom: result } : t));
+        notify(
+          'info',
+          `Zoomed edit ready: ${result.output} (${result.frames} frames, ${result.keyframes} keyframes, ${result.tookSeconds}s)`,
+        );
+        await record(
+          'recording_zoomed',
+          {
+            source: result.source,
+            output: result.output,
+            cursorTrack: result.cursorTrack,
+            outputBytes: result.outputBytes,
+            width: result.width,
+            height: result.height,
+            frames: result.frames,
+            keyframes: result.keyframes,
+            durationSeconds: result.durationSeconds,
+            tookSeconds: result.tookSeconds,
+            notes: result.notes,
+          },
+          cause ? [cause] : [],
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Be precise about what survived. The take and its MP4 are untouched;
+        // only the extra pass failed, and conflating them would send someone
+        // looking for a recording that is sitting right there.
+        notify('error', `${message} The recording and its MP4 are untouched at ${source}.`);
+        await record(
+          'recording_error',
+          { phase: 'zoom', source, cursorTrack, message, afterSeconds: Math.round((Date.now() - startedAt) / 1000) },
+          cause ? [cause] : [],
+        );
+      } finally {
+        setZooming(false);
+      }
+    },
+    [notify, record],
+  );
+
   const stopRecording = useCallback(async () => {
     const session = sessionRef.current;
     if (!session) return;
@@ -475,7 +548,25 @@ export function StudioSection({ workspace }: SectionProps) {
     recEventIdRef.current = null;
     try {
       const closed = await session.stop();
-      setTake({ path: closed.path, bytes: closed.bytes, durationMs: closed.durationMs, mp4: null });
+      setTake({
+        path: closed.path,
+        bytes: closed.bytes,
+        durationMs: closed.durationMs,
+        mp4: null,
+        cursorTrack: closed.cursor?.path ?? null,
+        zoom: null,
+      });
+      setZoomPlan(null);
+      // Fetch the PLAN immediately — it is instant and says how many zooms the
+      // cursor actually justifies, so nobody commits minutes to an encode
+      // before knowing whether there is anything to see.
+      if (closed.cursor?.path) {
+        void fetchZoomPlan(closed.path, closed.cursor.path)
+          .then(setZoomPlan)
+          .catch((error: unknown) =>
+            notify('warn', `The zoom plan could not be read: ${error instanceof Error ? error.message : String(error)}`),
+          );
+      }
       notify('info', `Recording saved: ${closed.path} (${formatBytes(closed.bytes)})`);
       const stopped = await record(
         'recording_stopped',
@@ -1150,11 +1241,50 @@ export function StudioSection({ workspace }: SectionProps) {
                       Finalise to MP4
                     </Button>
                   )}
+                  {/* The zoom pass. Offered only when a cursor track exists,
+                      and it says the cost out loud: this one re-encodes. */}
+                  {take.cursorTrack ? (
+                    take.zoom ? (
+                      <>
+                        <p className="break-all font-mono text-[10px] text-chart-4" data-testid="text-take-zoom">
+                          {take.zoom.output}
+                        </p>
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {take.zoom.width}×{take.zoom.height} · {take.zoom.keyframes} keyframes · {take.zoom.frames} frames · {take.zoom.tookSeconds}s
+                        </p>
+                      </>
+                    ) : zooming ? (
+                      <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-zooming">
+                        Rendering the zoomed edit… this re-encodes every frame, so it takes longer than the take did.
+                      </p>
+                    ) : zoomPlan && countZooms(zoomPlan.keyframes) === 0 ? (
+                      <p className="text-[10px] text-muted-foreground" data-testid="text-no-zooms">
+                        {zoomPlan.notes[0] ?? 'The cursor never settled long enough to justify a zoom.'}
+                      </p>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7"
+                        onClick={() => void renderZoom(take.path, take.cursorTrack!, null)}
+                        data-testid="button-zoom"
+                      >
+                        <Crosshair className="mr-1.5 h-3 w-3" />
+                        {zoomPlan
+                          ? `Zoomed edit · ${countZooms(zoomPlan.keyframes)} zoom${countZooms(zoomPlan.keyframes) === 1 ? '' : 's'}`
+                          : 'Zoomed edit'}
+                      </Button>
+                    )
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      No cursor track, so no zoomed edit for this take.
+                    </p>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
                     className="h-7 justify-start px-1.5 text-[11px]"
-                    onClick={() => void recording?.revealInFolder(take.mp4?.output ?? take.path)}
+                    onClick={() => void recording?.revealInFolder(take.zoom?.output ?? take.mp4?.output ?? take.path)}
                     data-testid="button-reveal"
                   >
                     <FolderOpen className="mr-1.5 h-3 w-3" /> Show in folder
@@ -1338,6 +1468,7 @@ const KIND_LABEL: Record<StudioEventKind, string> = {
   recording_started: 'recording started',
   recording_stopped: 'recording saved',
   recording_finalised: 'MP4 finalised',
+  recording_zoomed: 'zoomed edit rendered',
   recording_error: 'recording error',
 };
 
@@ -1388,6 +1519,7 @@ function ReceiptsCard({
                   e.kind === 'recording_started' && 'bg-destructive',
                   e.kind === 'recording_stopped' && 'bg-chart-1',
                   e.kind === 'recording_finalised' && 'bg-chart-4',
+                  e.kind === 'recording_zoomed' && 'bg-chart-5',
                   e.kind === 'recording_error' && 'bg-chart-3',
                 )}
               />
