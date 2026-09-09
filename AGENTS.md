@@ -5,30 +5,47 @@ touching anything. `README.md` is the pitch; `DEPLOY.md` is the operational
 manual; this file is what a contributor needs in order not to break the thing
 that makes the project worth having.
 
-Repo: `https://github.com/aiassistsecure/ua-social-browser` (branch `main`, GPLv3).
+Repo: `https://github.com/Eth-Interchained/marquee` (branch `main`, GPLv3).
 
 ---
 
 ## 1. What this is
 
-A desktop browser for running social accounts, where **AI drafts, a human
-approves, and the post goes out through the operator's own signed-in session**.
+**marquee — a creator's desktop.** It streams (Studio + Go Live), it gives you a
+real terminal, and it posts to your social accounts through the sessions *you*
+are signed into. Every on-air event is recorded as a hash-chained document you
+can read and verify.
 
-The one sentence that governs every design decision: *there is no server-held
-token and no bot account anywhere in this system.* A post reaches an audience
-because the person who owns the account was signed into it in this browser and
-approved that text. If that chain cannot be completed, the app says so and
-stops — it never posts by another route and never reports a post it did not
-make.
+**Lineage — know this before you touch anything.** marquee is a fork of
+**UA Social Browser** (`aiassistsecure/ua-social-browser`) and keeps its shell
+wholesale: per-workspace session isolation, UA profiles, live in-shell sign-in,
+and the human-approved publishing path. Those parts are not legacy to be cleaned
+up — they are the product's other half, and their invariants (§2) are still
+load-bearing. What marquee *adds* is the Studio, the Terminal, the bundled
+Python runtime, Go Live, and the receipts store.
+
+Two sentences govern every design decision:
+
+- *There is no server-held token and no bot account anywhere in this system.* A
+  post reaches an audience because the person who owns the account was signed
+  into it in this browser and approved that text.
+- *Nothing goes on air unrecorded, and nothing that fails is silent.* Every
+  source change, scene save, go-live and stream end is an append-only document
+  chained to its cause; a receipt that cannot be written is shown, not swallowed.
+
+If either chain cannot be completed, the app says so and stops. It never posts
+by another route, never claims a stream that is not up, and never reports
+something it did not do.
 
 Twelve networks are configured, X is primary. Single-tenant today, with a
 tenant key on every stored document so multi-tenant is a resolver change rather
 than a migration.
 
-**The Replit repl is a development surface only.** It has no browser sessions,
-so publishing there is impossible by construction; the API server says exactly
-that instead of pretending. The product is the Electron shell, built and run on
-the operator's own machine.
+**The web surface is a development surface only.** It has no browser sessions
+and no bundled Python, so publishing is impossible there by construction and
+the Terminal has nothing to connect to — both say exactly that instead of
+pretending. The product is the Electron shell, built and run on the operator's
+own machine.
 
 ---
 
@@ -61,11 +78,11 @@ told to someone about their own account.
 6. **One writer per document.** The browser state document belongs to the UI;
    the scheduler reports through the dispatch log instead of writing into it.
 7. **Sessions are per workspace and never shared.** Partition key is
-   `persist:ua-<sanitised id>-<digest of raw id>` — the digest exists because
+   `persist:mq-<sanitised id>-<digest of raw id>` — the digest exists because
    sanitising alone would collide `team/a` with `team-a`, which is a
    cross-account cookie leak.
 8. **Page content gets no preload.** Workspace surfaces, workspace tabs, the
-   sign-in tab, and the hidden publish window all run without `window.uaShell`.
+   sign-in tab, and the hidden publish window all run without `window.marqueeShell`.
    Only the privileged UI origin has it, and that origin is cookie-gated.
 9. **The app never reads, fills, or stores credentials.** Sign-in is the human
    typing into the network's own page.
@@ -91,12 +108,12 @@ owner, not a refactor.
 
 ```
 artifacts/
-  ua-social-browser/   React + Vite workspace UI (the sidebar app)
+  studio/             React + Vite renderer: the sidebar app, Studio, Terminal
     src/lib/studio/    Studio compositor: scene graph, canvas renderer, capture, mixer (pure, tested; from Eth-Interchained/marquee)
   api-server/          Express API: state, AI, scheduling, publish gateway
   mockup-sandbox/      Replit-only component preview surface; not part of the product
 desktop/
-  ua-shell/            Electron shell: the actual browser and the only publisher
+  shell/               Electron shell: the actual browser, the only publisher, and the runtime host
     vendor/jenny/      Jenny's Python orchestrator, copied VERBATIM (sha256 pinned) — never edit
     vendor/keystone-lite/  shell-path.ts, verbatim: real user PATH for a GUI-launched app
   py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY)
@@ -153,14 +170,14 @@ out of the browser's document.
 ```
 workspace UI  ──fetch /api/*──▶  API server  ──loopback + token──▶  shell publisher
      ▲                               │                                    │
-     └────── window.uaShell ─────────┘                          workspace session
+     └────── window.marqueeShell ─────────┘                          workspace session
              (only in the shell)                                (cookies, UA profile)
 ```
 
 - In the shell, the UI is served from a loopback origin that proxies `/api` to
   the API server, so the UI's relative fetches work unchanged in both places.
 - On Replit the UI hits the API server artifact directly at `/api`.
-- `window.uaShell` (typed in `artifacts/ua-social-browser/src/lib/shell-bridge.ts`)
+- `window.marqueeShell` (typed in `artifacts/studio/src/lib/shell-bridge.ts`)
   exists only inside the shell: `attachSurface`, `openInWorkspaceTab`,
   `getSessionStatus`. Web-surface code must degrade honestly when it is absent.
 
@@ -173,7 +190,7 @@ workspace UI  ──fetch /api/*──▶  API server  ──loopback + token─
 Three workflows, already configured — restart them rather than inventing new ones:
 
 - `artifacts/api-server: API Server`
-- `artifacts/ua-social-browser: web`
+- `artifacts/studio: web`
 - `artifacts/mockup-sandbox: Component Preview Server`
 
 Both app services read `PORT` from the environment. The Vite config *throws* if
@@ -183,9 +200,9 @@ Both app services read `PORT` from the environment. The Vite config *throws* if
 
 ```bash
 pnpm install
-PORT=5173 BASE_PATH=/ pnpm --filter @workspace/ua-social-browser run build
-pnpm --filter @workspace/api-server run build
-pnpm --filter @workspace/ua-shell run start      # builds, then launches Electron
+PORT=5173 BASE_PATH=/ pnpm --filter @marquee/studio run build
+pnpm --filter @marquee/api-server run build
+pnpm --filter @marquee/shell run start      # builds, then launches Electron
 ```
 
 The shell mints its own bridge token and API access token at startup and passes
@@ -196,8 +213,8 @@ default path.
 
 ```bash
 pnpm run typecheck                              # whole workspace
-pnpm --filter @workspace/ua-shell run test      # 76 tests, no display needed
-pnpm --filter @workspace/api-server run test    # 24 tests, scheduled dispatch
+pnpm --filter @marquee/shell run test      # 76 tests, no display needed
+pnpm --filter @marquee/api-server run test    # 24 tests, scheduled dispatch
 ```
 
 Both suites are fast and neither needs Electron or a browser. Run them before
@@ -211,7 +228,7 @@ budget, a stale unconfirmed-outcome assumption).
 `lib/api-spec/openapi.yaml` is the source of truth. After editing it:
 
 ```bash
-pnpm --filter @workspace/api-spec run codegen
+pnpm --filter @marquee/api-spec run codegen
 ```
 
 This runs orval into `lib/api-zod` and `lib/api-client-react`, then typechecks
@@ -361,7 +378,7 @@ Two open project tasks live here (see §11).
 - **The AI Composer is a pool, not a result set.** Suggestions accumulate:
   "Keep going" appends a batch (duplicates dropped), "Start over" replaces.
   Acting on a card — saved as a draft, or discarded — removes it, after a
-  ~420ms holo sweep (`.ua-dissolving` in `index.css`); the card is dropped from
+  ~420ms holo sweep (`.mq-dissolving` in `index.css`); the card is dropped from
   state when the animation ends, because dropping it on click unmounts the
   element and nothing plays. This is composer-only: the review queue and the
   calendar keep every draft, which is where a saved one is worked on.
@@ -390,7 +407,7 @@ Two open project tasks live here (see §11).
   theorising about a slow publish.
 - **A file dropped anywhere but a card is swallowed in `App.tsx`.** The default
   action for a file dropped on a page is to navigate to it, and this page is the
-  privileged UI origin — the one view holding `window.uaShell`. A near miss
+  privileged UI origin — the one view holding `window.marqueeShell`. A near miss
   while attaching a photo would replace the whole app with an image viewer,
   with no way back. The window-level listener prevents that and does nothing
   else; cards that accept a drop call `preventDefault` themselves.
@@ -426,7 +443,7 @@ treat it as proof the path works, not as coverage of every X UI state.
 adapters against real accounts (§7). No display exists in the Replit container,
 so nobody has watched them run.
 
-**A fresh install is empty.** `artifacts/ua-social-browser/src/data.ts` boots
+**A fresh install is empty.** `artifacts/studio/src/data.ts` boots
 with no workspaces, drafts, accounts, or activity, and no approver name. The
 review queue refuses to approve until Settings › Approver name is filled, and
 the publish path sends the recorded approval verbatim or refuses — there is no

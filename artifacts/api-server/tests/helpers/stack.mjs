@@ -37,7 +37,7 @@ function startFakeShell(port, token) {
     req.on("end", () => {
       // The real shell refuses anything that does not carry its capability
       // token, so an unpaired server must not be able to post here either.
-      if (req.headers["x-ua-shell-token"] !== token) {
+      if (req.headers["x-marquee-shell-token"] !== token) {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ detail: "Not paired with this shell." }));
         return;
@@ -81,7 +81,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function startStack({ intervalMs = 500, bridge = true } = {}) {
   const bridgePort = await freePort();
   const apiPort = await freePort();
-  const dataDir = mkdtempSync(join(tmpdir(), "ua-scheduler-test-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "marquee-test-"));
 
   const shellToken = `test-shell-token-${bridgePort}`;
   const shell = startFakeShell(bridgePort, shellToken);
@@ -96,11 +96,11 @@ export async function startStack({ intervalMs = 500, bridge = true } = {}) {
       NODE_ENV: "test",
       PORT: String(apiPort),
       NEDB_DATA_DIR: dataDir,
-      UA_SESSION_BRIDGE_URL: bridge ? `http://127.0.0.1:${bridgePort}` : "",
+      MARQUEE_SESSION_BRIDGE_URL: bridge ? `http://127.0.0.1:${bridgePort}` : "",
       // The shell pairs the two halves; without the token the bridge counts as
       // unattached, exactly as it does on the web surface.
-      UA_SESSION_BRIDGE_TOKEN: bridge ? shellToken : "",
-      UA_SCHEDULER_INTERVAL_MS: String(intervalMs),
+      MARQUEE_SESSION_BRIDGE_TOKEN: bridge ? shellToken : "",
+      MARQUEE_SCHEDULER_INTERVAL_MS: String(intervalMs),
     },
     stdio: ["ignore", "ignore", "ignore"],
   });

@@ -5,7 +5,7 @@ description: Why getDisplayMedia() needs the shell's picker, why the handler is 
 
 The Studio section composites a screen or window, a camera, and a mixer onto
 one canvas (`src/lib/studio/*`, pure and tested). Capturing the screen inside
-the shell goes through `desktop/ua-shell/src/capture.ts`.
+the shell goes through `desktop/shell/src/capture.ts`.
 
 ## Electron has no screen picker; a page cannot pick for itself
 
@@ -17,7 +17,7 @@ place a source is chosen.
 (first screen, primary display) the operator can broadcast the wrong screen —
 worse than no stream.
 
-**How to apply:** the UI calls `uaShell.studio.listCaptureSources()`, shows its
+**How to apply:** the UI calls `marqueeShell.studio.listCaptureSources()`, shows its
 own thumbnails, then `selectCaptureSource({ sourceId, withAudio })` to ARM the
 handler, then `getDisplayMedia()`. The handler resolves with exactly that source
 and disarms. An unarmed request is refused and logged with the fix.
@@ -47,6 +47,6 @@ input or a virtual audio device. Do not "fix" this by faking an audio track.
 
 ## Without the shell, the browser's picker is the truth
 
-On the web surface `window.uaShell` is absent, so the Studio uses the browser's
+On the web surface `window.marqueeShell` is absent, so the Studio uses the browser's
 built-in `getDisplayMedia()` picker and says so. Browser audio comes only with
 a Chrome TAB share, and the panel says that too.

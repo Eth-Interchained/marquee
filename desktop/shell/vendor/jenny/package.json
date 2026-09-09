@@ -1,0 +1,6 @@
+{
+  "name": "@marquee/vendor-jenny",
+  "private": true,
+  "type": "commonjs",
+  "description": "Marks Jenny's verbatim CommonJS files as CommonJS. The marquee-shell package is type:module, and without this Node/tsx would parse these .js files as ESM and the `module.exports` default would vanish. esbuild's bundle does not need it; tests running the source do. This is an added file — the vendored .js files themselves are untouched."
+}

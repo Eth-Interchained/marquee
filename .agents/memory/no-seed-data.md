@@ -3,7 +3,7 @@ name: No seed data, and why the approver name is required
 description: How fictional boot state produced a real post signed by a person who does not exist, and the two rules that keep it from recurring.
 ---
 
-`artifacts/ua-social-browser/src/data.ts` (`initialState`) is what a fresh
+`artifacts/studio/src/data.ts` (`initialState`) is what a fresh
 install boots with and what "Reset to defaults" returns to. It contains UA
 profiles — declared device configurations, real browser strings — and nothing
 else. No workspaces, drafts, accounts, activity, or approver name.

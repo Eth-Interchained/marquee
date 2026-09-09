@@ -12,7 +12,7 @@ import { NedbCore } from "nedb-engine";
 
 export const dataDirectory =
   process.env.NEDB_DATA_DIR ??
-  path.join(process.cwd(), ".data", "ua-social-browser");
+  path.join(process.cwd(), ".data", "marquee");
 
 mkdirSync(dataDirectory, { recursive: true });
 

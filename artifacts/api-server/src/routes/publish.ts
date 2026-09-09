@@ -6,7 +6,7 @@ import {
   PublishPostBody,
   SignOutOfSessionBody,
   SignOutOfSessionResponse,
-} from "@workspace/api-zod";
+} from "@marquee/api-zod";
 import { readBrowserState } from "../lib/browser-store";
 import { releaseClaim, takeClaim } from "../lib/dispatch-claims";
 import {

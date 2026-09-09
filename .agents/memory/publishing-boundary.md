@@ -65,7 +65,7 @@ ledger that cannot be corrected by the person who can see the truth is not more
 honest than one that can; it is only wrong for longer.
 
 `attested` is that correction. The rules are in
-`artifacts/ua-social-browser/src/lib/attestation.ts` and are load-bearing:
+`artifacts/studio/src/lib/attestation.ts` and are load-bearing:
 
 - **Never `published`.** `published` means the network confirmed it. `attested`
   means a named person says so. The badge reads "Posted · your word", and the

@@ -1,4 +1,4 @@
-import { PublishPostBody } from "@workspace/api-zod";
+import { PublishPostBody } from "@marquee/api-zod";
 import { readBrowserState } from "./browser-store";
 import type { DispatchClaim } from "./dispatch-claims";
 import { releaseClaim, takeClaim } from "./dispatch-claims";
@@ -38,7 +38,7 @@ import { SINGLE_TENANT_ID, tenancyMode } from "./tenant";
 const DEFAULT_INTERVAL_MS = 30_000;
 
 export function schedulerIntervalMs(): number {
-  const raw = process.env.UA_SCHEDULER_INTERVAL_MS;
+  const raw = process.env.MARQUEE_SCHEDULER_INTERVAL_MS;
   if (raw === undefined || raw.trim() === "") return DEFAULT_INTERVAL_MS;
   const parsed = Number(raw);
   if (Number.isNaN(parsed) || parsed < 0) return DEFAULT_INTERVAL_MS;

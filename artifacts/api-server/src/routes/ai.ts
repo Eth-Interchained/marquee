@@ -13,7 +13,7 @@ import {
   CreateAiSuggestionBody,
   CreateAiSuggestionResponse,
   ListAiModelsResponse,
-} from "@workspace/api-zod";
+} from "@marquee/api-zod";
 
 const router: IRouter = Router();
 const AIASSIST_BASE_URL = "https://api.AiAssist.net";

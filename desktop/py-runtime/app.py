@@ -2,7 +2,7 @@
 UA Python runtime — the shell's bundled Python, Jenny-shaped.
 
 Spawned and supervised by Jenny's orchestrator (vendored verbatim in
-desktop/ua-shell/vendor/jenny). The contract the orchestrator relies on:
+desktop/shell/vendor/jenny). The contract the orchestrator relies on:
 
   * `GET /health` answers 200 JSON with no authentication — HealthMonitor
     polls it every 3 s and restarts the child after 3 misses.
@@ -13,7 +13,7 @@ What this runtime adds on top of Jenny's reference server:
   * A capability token. Loopback is not an authorization boundary — any local
     process, and any page the operator visits, can reach 127.0.0.1 — so every
     route except /health requires the token the shell minted for this launch.
-    It arrives in UA_PY_RUNTIME_TOKEN, as a header (X-UA-Runtime-Token) on
+    It arrives in MARQUEE_PY_RUNTIME_TOKEN, as a header (X-Marquee-Runtime-Token) on
     HTTP and as ?token= on the WebSocket handshake (browsers cannot set
     headers on WebSocket upgrades; the shell's proxy adds the query string
     server-side, so the page never holds the token).
@@ -89,8 +89,8 @@ for _lg in (logging.getLogger(), _uv_error, logging.getLogger("uvicorn")):
     for _h in _lg.handlers:
         _h.addFilter(_RedactToken())
 
-TOKEN = os.environ.get("UA_PY_RUNTIME_TOKEN", "")
-PORT = int(os.environ.get("JENNY_PORT") or os.environ.get("UA_PY_RUNTIME_PORT") or "18764")
+TOKEN = os.environ.get("MARQUEE_PY_RUNTIME_TOKEN", "")
+PORT = int(os.environ.get("JENNY_PORT") or os.environ.get("MARQUEE_PY_RUNTIME_PORT") or "18764")
 WORKSPACE = os.environ.get("JENNY_WORKSPACE_DIR") or os.getcwd()
 
 # Programs the PTY may launch. A closed list, not a free string: the terminal
@@ -122,11 +122,11 @@ async def require_token(request: Request, call_next):  # type: ignore[no-untyped
         # Refuse loudly rather than run open: an ungated runtime on loopback is
         # a shell for anything on this machine.
         return _unauthorized(
-            "UA_PY_RUNTIME_TOKEN is not set on this runtime; the shell must mint one before spawning it."
+            "MARQUEE_PY_RUNTIME_TOKEN is not set on this runtime; the shell must mint one before spawning it."
         )
-    presented = request.headers.get("x-ua-runtime-token", "")
+    presented = request.headers.get("x-marquee-runtime-token", "")
     if presented != TOKEN:
-        return _unauthorized("missing or wrong X-UA-Runtime-Token header")
+        return _unauthorized("missing or wrong X-Marquee-Runtime-Token header")
     return await call_next(request)
 
 
@@ -315,7 +315,7 @@ async def ws_pty(ws: WebSocket) -> None:
 
 def main() -> None:
     if not TOKEN:
-        log.warning("UA_PY_RUNTIME_TOKEN is not set — every route except /health will answer 401")
+        log.warning("MARQUEE_PY_RUNTIME_TOKEN is not set — every route except /health will answer 401")
     log.info("UA Python runtime v%s on 127.0.0.1:%d (workspace %s)", VERSION, PORT, WORKSPACE)
     # access_log=False on purpose: uvicorn's access line prints the full request
     # target, and the WebSocket handshake carries the capability token in its

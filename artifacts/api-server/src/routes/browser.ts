@@ -176,7 +176,7 @@ router.get("/browser/export", (req, res): void => {
 
   res.setHeader(
     "Content-Disposition",
-    'attachment; filename="ua-social-browser-export.json"',
+    'attachment; filename="marquee-export.json"',
   );
   res.json(exportStoreHistory(tenantId));
 });

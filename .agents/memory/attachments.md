@@ -19,7 +19,7 @@ and the append-only ledger would keep every copy for good.
 absolute path and sends that over the bridge. Both processes see one
 filesystem: the shell chose `NEDB_DATA_DIR` and spawned the server with it. The
 shell then does two things before anything is uploaded
-(`desktop/ua-shell/src/publisher/approved-media.ts`):
+(`desktop/shell/src/publisher/approved-media.ts`):
 
 1. Refuses any path outside its own data directory. The bridge is loopback and
    token-gated, but the component that turns a path into "upload this file"
@@ -29,7 +29,7 @@ shell then does two things before anything is uploaded
    that was approved, so the post does not go out.
 
 The upload itself is CDP `DOM.setFileInputFiles`
-(`desktop/ua-shell/src/publisher/upload.ts`). Page JavaScript cannot set
+(`desktop/shell/src/publisher/upload.ts`). Page JavaScript cannot set
 `input.files`, and clicking the input opens a native dialog nothing here can
 drive. The debugger is already attached for UA emulation, so this reuses that
 session — attaching twice throws.

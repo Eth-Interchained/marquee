@@ -57,7 +57,7 @@ Thumbs.db
 !.env.example
 
 # Jenny LogAggregator writes next to cwd during shell tests
-desktop/ua-shell/.jenny/
+desktop/shell/.jenny/
 # Python runtime venv + bytecode
 desktop/py-runtime/.venv/
 desktop/py-runtime/__pycache__/

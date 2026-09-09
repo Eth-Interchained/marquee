@@ -7,7 +7,7 @@ import type { Request, Response } from "express";
  * Every persisted document is still written under a tenant scope key so that
  * turning on multi-tenancy is a change of resolver, not a change of schema.
  *
- * To go multi-tenant: set UA_TENANCY_MODE=multi and populate
+ * To go multi-tenant: set MARQUEE_TENANCY_MODE=multi and populate
  * `res.locals.tenantId` from whatever authentication layer is adopted. This
  * module deliberately throws instead of falling back to the personal scope —
  * a silent fallback in multi-tenant mode would leak one account's workspaces
@@ -23,7 +23,7 @@ export class TenantResolutionError extends Error {
 }
 
 export function tenancyMode(): TenancyMode {
-  return process.env.UA_TENANCY_MODE === "multi" ? "multi" : "single";
+  return process.env.MARQUEE_TENANCY_MODE === "multi" ? "multi" : "single";
 }
 
 export function resolveTenantId(req: Request): string {

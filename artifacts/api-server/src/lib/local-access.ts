@@ -3,8 +3,8 @@
  *
  * Inside the shell this process holds the bridge capability, so anything that
  * can call `/api/publish` can post through the operator's live sessions. The
- * shell therefore starts it bound to loopback *and* with UA_API_ACCESS_TOKEN
- * set; every request must then carry that token in `X-UA-Api-Token`. The
+ * shell therefore starts it bound to loopback *and* with MARQUEE_API_ACCESS_TOKEN
+ * set; every request must then carry that token in `X-Marquee-Api-Token`. The
  * shell's own UI proxy is the only thing that knows it.
  *
  * On the web development surface the variable is unset and this middleware
@@ -15,10 +15,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
-export const API_TOKEN_HEADER = "x-ua-api-token";
+export const API_TOKEN_HEADER = "x-marquee-api-token";
 
 function configuredToken(): string | null {
-  const raw = process.env["UA_API_ACCESS_TOKEN"]?.trim();
+  const raw = process.env["MARQUEE_API_ACCESS_TOKEN"]?.trim();
   return raw ? raw : null;
 }
 

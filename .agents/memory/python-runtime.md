@@ -5,7 +5,7 @@ description: Why Jenny's orchestrator is vendored verbatim, how the runtime is g
 
 The shell runs a second child beside the API server: a Python runtime
 (`desktop/py-runtime/app.py`), supervised by Jenny's orchestrator copied
-**byte-for-byte** into `desktop/ua-shell/vendor/jenny` from
+**byte-for-byte** into `desktop/shell/vendor/jenny` from
 `aiassistsecure/_Gex` branch `jenny`.
 
 ## The vendored files are not ours to edit
@@ -82,7 +82,7 @@ of the web development surface).
 **Why:** the operator's accounts and drafts do not depend on Python; refusing to
 open the browser because a venv is missing would be the wrong trade.
 
-**How to apply:** `UA_PY_RUNTIME=0` disables it deliberately; `UA_PY_RUNTIME_DIR`
+**How to apply:** `MARQUEE_PY_RUNTIME=0` disables it deliberately; `MARQUEE_PY_RUNTIME_DIR`
 points at a different `app.py`. Dev needs `desktop/py-runtime/.venv` (see its
 README); packaged builds carry the PyInstaller bundle under `resources/python`
 and Jenny's `findPythonExe` locates it — keep its recursive scan, the CI recipe

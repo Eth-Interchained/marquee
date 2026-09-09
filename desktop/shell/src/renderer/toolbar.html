@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>marquee</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0b0f;
+        --line: #23232c;
+        --text: #ececf1;
+        --muted: #8b8b99;
+        --chip: #16161d;
+        --accent: #7c5cff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 48px;
+        overflow: hidden;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+        color: var(--text);
+        font: 12px/1.2 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+
+      button {
+        -webkit-app-region: no-drag;
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        height: 26px;
+        min-width: 26px;
+        padding: 0 8px;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        background: var(--chip);
+        color: var(--text);
+      }
+
+      button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      #identity {
+        -webkit-app-region: no-drag;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--chip);
+        white-space: nowrap;
+        flex: 0 0 auto;
+      }
+
+      #dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        flex: 0 0 auto;
+      }
+
+      #workspace {
+        font-weight: 600;
+      }
+
+      #profile,
+      #timezone {
+        color: var(--muted);
+      }
+
+      #divider {
+        color: var(--line);
+      }
+
+      #tabs {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      #tabs::-webkit-scrollbar {
+        display: none;
+      }
+
+      .tab {
+        -webkit-app-region: no-drag;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 220px;
+        height: 28px;
+        padding: 0 4px 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .tab.active {
+        background: var(--chip);
+        color: var(--text);
+        border-color: #33333f;
+      }
+
+      .tab .label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tab .close {
+        border-radius: 4px;
+        padding: 0 4px;
+        line-height: 1;
+        height: 18px;
+        min-width: 18px;
+      }
+
+      #address {
+        -webkit-app-region: no-drag;
+        flex: 0 1 320px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+        padding: 5px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--chip);
+      }
+
+      #address:empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="nav">
+      <button id="back" title="Back">‹</button>
+      <button id="forward" title="Forward">›</button>
+      <button id="reload" title="Reload">⟳</button>
+      <button id="sidebar" title="Back to the workspace">Workspace</button>
+    </div>
+
+    <div id="identity" title="The identity every request in this view carries">
+      <span id="dot"></span>
+      <span id="workspace">No workspace</span>
+      <span id="divider">|</span>
+      <span id="profile">Shell default UA</span>
+      <span id="timezone"></span>
+    </div>
+
+    <div id="tabs"></div>
+    <div id="address"></div>
+
+    <script src="./toolbar.js"></script>
+  </body>
+</html>

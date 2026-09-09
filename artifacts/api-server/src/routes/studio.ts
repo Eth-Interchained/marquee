@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { RecordStudioEventBody, SaveStudioSceneBody } from "@workspace/api-zod";
+import { RecordStudioEventBody, SaveStudioSceneBody } from "@marquee/api-zod";
 import {
   EVENT_KINDS,
   listEvents,

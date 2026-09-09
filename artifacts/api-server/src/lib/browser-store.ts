@@ -6,7 +6,7 @@ const COLLECTION = "browser_state";
 
 /**
  * Documents are keyed by tenant scope even though the product ships
- * single-tenant. Flipping UA_TENANCY_MODE to "multi" then partitions state
+ * single-tenant. Flipping MARQUEE_TENANCY_MODE to "multi" then partitions state
  * without a migration.
  */
 function documentId(tenantId: string): string {

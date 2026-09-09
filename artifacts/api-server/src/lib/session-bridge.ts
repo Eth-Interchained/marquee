@@ -8,8 +8,8 @@
  * privileged IPC endpoint.
  *
  * The native shell exposes the endpoint on loopback and hands its address to
- * the API server through UA_SESSION_BRIDGE_URL, together with a capability
- * token in UA_SESSION_BRIDGE_TOKEN. Both are required: loopback is not a
+ * the API server through MARQUEE_SESSION_BRIDGE_URL, together with a capability
+ * token in MARQUEE_SESSION_BRIDGE_TOKEN. Both are required: loopback is not a
  * privilege boundary, so the shell refuses any bridge call that does not carry
  * the token it minted at startup. When either variable is absent (for example,
  * when the web development surface runs on its own), publishing reports
@@ -73,15 +73,15 @@ export type BridgePublishOutcome =
 const REQUEST_TIMEOUT_MS = 40_000;
 
 /** Header the shell requires on every bridge call. */
-const BRIDGE_TOKEN_HEADER = "X-UA-Shell-Token";
+const BRIDGE_TOKEN_HEADER = "X-Marquee-Shell-Token";
 
 function bridgeUrl(): string | null {
-  const raw = process.env.UA_SESSION_BRIDGE_URL?.trim();
+  const raw = process.env.MARQUEE_SESSION_BRIDGE_URL?.trim();
   return raw ? raw.replace(/\/+$/, "") : null;
 }
 
 function bridgeToken(): string | null {
-  const raw = process.env.UA_SESSION_BRIDGE_TOKEN?.trim();
+  const raw = process.env.MARQUEE_SESSION_BRIDGE_TOKEN?.trim();
   return raw ? raw : null;
 }
 
@@ -94,7 +94,7 @@ function unavailableDetail(): string {
   if (bridgeUrl() === null) {
     return "Publishing requires the desktop shell. The web surface has no access to your authenticated platform session.";
   }
-  return "A session bridge address is set but its capability token is missing, so the shell will refuse every call. Start the API server from the shell, or pair it with UA_SESSION_BRIDGE_TOKEN.";
+  return "A session bridge address is set but its capability token is missing, so the shell will refuse every call. Start the API server from the shell, or pair it with MARQUEE_SESSION_BRIDGE_TOKEN.";
 }
 
 async function callBridge(

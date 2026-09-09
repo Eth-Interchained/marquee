@@ -1,11 +1,11 @@
-# Deploying UA Social Browser
+# Deploying marquee
 
 This project has two halves that ship on different tracks:
 
 | Half | What it is | Where it runs |
 | --- | --- | --- |
-| **Workspace surface** (`artifacts/ua-social-browser`, `artifacts/api-server`) | The sidebar UI, the AI endpoints, the review queue, the ledger | Replit today; embedded in the desktop shell in production |
-| **Native shell** (`desktop/ua-shell`) | A Chromium desktop browser with per-workspace session isolation, UA profiles, and the session bridge | Built and signed on your own machines |
+| **Workspace surface** (`artifacts/studio`, `artifacts/api-server`) | The sidebar UI, the AI endpoints, the review queue, the ledger | Replit today; embedded in the desktop shell in production |
+| **Native shell** (`desktop/shell`) | A Chromium desktop browser with per-workspace session isolation, UA profiles, and the session bridge | Built and signed on your own machines |
 
 The Replit artifact is the **development surface** for the shared UI and API. It is
 not the shipped product, and it deliberately cannot post to any network — see
@@ -15,17 +15,17 @@ not the shipped product, and it deliberately cannot post to any network — see
 
 ## Running it, in one paragraph
 
-Run `pnpm install`, then `pnpm --filter @workspace/api-spec run codegen` to
+Run `pnpm install`, then `pnpm --filter @marquee/api-spec run codegen` to
 generate the client from the OpenAPI contract, and `pnpm run typecheck` to
 confirm the tree is sound. For the development surface, start the two services —
-`pnpm --filter @workspace/api-server run dev` (builds and serves the API on
-`PORT`, mounted at `/api`) and `pnpm --filter @workspace/ua-social-browser run
+`pnpm --filter @marquee/api-server run dev` (builds and serves the API on
+`PORT`, mounted at `/api`) and `pnpm --filter @marquee/studio run
 dev` (the Vite dev server for the sidebar UI) — which is all you need for
 drafting, approving, scheduling, and the ledger; publishing answers `503` there
 because there is no signed-in session to post through. For the real product,
 build both halves the shell hosts with `PORT=5173 BASE_PATH=/ pnpm --filter
-@workspace/ua-social-browser run build` and `pnpm --filter @workspace/api-server
-run build`, then launch `pnpm --filter @workspace/ua-shell run start`, which
+@marquee/studio run build` and `pnpm --filter @marquee/api-server
+run build`, then launch `pnpm --filter @marquee/shell run start`, which
 builds the Electron shell, spawns its own API server on loopback, and opens the
 browser — this one needs a desktop with a display and will not run in the Replit
 container. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
@@ -40,7 +40,7 @@ container. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
   (Electron) application; it cannot run in the Replit container, which has no
   GUI. Everything in it except the browser windows themselves — the session
   bridge, the idempotency ledger, the UA/Client-Hints derivation, the privileged
-  origin — is covered by `pnpm --filter @workspace/ua-shell run test`, which does
+  origin — is covered by `pnpm --filter @marquee/shell run test`, which does
   run here.
 
 ### If the build cannot find a native binary
@@ -71,46 +71,46 @@ pnpm install
 | --- | --- | --- | --- |
 | `AIASSIST_API_KEY` | yes | — | Credential for `api.AiAssist.net`. Server-side only. The former spelling `AIAssIST_API_KEY` is still read as a fallback and logs a deprecation warning on first use; migrate and delete it, because two names for one credential is how an environment ends up with a stale copy nobody notices. |
 | `PORT` | injected | `8080` | Assigned per artifact by Replit. Never hard-code it. |
-| `NEDB_DATA_DIR` | no | `<cwd>/.data/ua-social-browser` | Append-only ledger location. Point it at a persistent volume in the desktop build. |
-| `UA_SESSION_BRIDGE_URL` | no | unset | Loopback address of the native shell's publisher IPC endpoint. **Unset means publishing is disabled.** |
-| `UA_SESSION_BRIDGE_TOKEN` | with the above | unset | Capability token the shell mints at startup. The shell refuses every bridge call without it, so an address on its own also means publishing is disabled. Set by the shell for the API server it starts; never commit it. |
-| `UA_API_ACCESS_TOKEN` | in the shell | unset | When set, every `/api` request must present it in `X-UA-Api-Token` and CORS is switched off entirely. The shell mints one for the API server it starts, and reads this variable to pair with an API server you run yourself. Unset on the web surface, which holds no publishing capability. |
+| `NEDB_DATA_DIR` | no | `<cwd>/.data/marquee` | Append-only ledger location. Point it at a persistent volume in the desktop build. |
+| `MARQUEE_SESSION_BRIDGE_URL` | no | unset | Loopback address of the native shell's publisher IPC endpoint. **Unset means publishing is disabled.** |
+| `MARQUEE_SESSION_BRIDGE_TOKEN` | with the above | unset | Capability token the shell mints at startup. The shell refuses every bridge call without it, so an address on its own also means publishing is disabled. Set by the shell for the API server it starts; never commit it. |
+| `MARQUEE_API_ACCESS_TOKEN` | in the shell | unset | When set, every `/api` request must present it in `X-Marquee-Api-Token` and CORS is switched off entirely. The shell mints one for the API server it starts, and reads this variable to pair with an API server you run yourself. Unset on the web surface, which holds no publishing capability. |
 | `HOST` | no | `0.0.0.0` | Interface to bind. The shell sets `127.0.0.1`; Replit needs the default so its proxy can reach the artifact. |
-| `UA_TENANCY_MODE` | no | `single` | `single` scopes every document to the `personal` tenant. `multi` requires an auth layer to set `res.locals.tenantId` and returns 401 without one. |
-| `UA_SCHEDULER_INTERVAL_MS` | no | `30000` | How often the scheduler looks for scheduled posts that are due. `0` switches automatic dispatch off; a scheduled post then waits for someone to press Post. Ignored in multi-tenant mode — see [Scheduled dispatch](#6-scheduled-dispatch). |
+| `MARQUEE_TENANCY_MODE` | no | `single` | `single` scopes every document to the `personal` tenant. `multi` requires an auth layer to set `res.locals.tenantId` and returns 401 without one. |
+| `MARQUEE_SCHEDULER_INTERVAL_MS` | no | `30000` | How often the scheduler looks for scheduled posts that are due. `0` switches automatic dispatch off; a scheduled post then waits for someone to press Post. Ignored in multi-tenant mode — see [Scheduled dispatch](#6-scheduled-dispatch). |
 
-Read by the native shell only (`desktop/ua-shell`):
+Read by the native shell only (`desktop/shell`):
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `UA_WORKSPACE_UI_URL` | no | unset | Load the sidebar from a running dev server instead of the built bundle. Development only. |
-| `UA_WORKSPACE_UI_DIR` | no | `artifacts/ua-social-browser/dist/public` | Built sidebar to serve from the shell's privileged origin. |
-| `UA_API_SERVER_ENTRY` | no | `artifacts/api-server/dist/index.mjs` | API server bundle the shell spawns. |
-| `UA_API_SERVER_URL` | no | unset | Use an already-running API server instead of spawning one. That server only publishes if it was itself started with `UA_SESSION_BRIDGE_URL`. |
-| `UA_SHELL_BRIDGE_PORT` | no | `0` (OS-assigned) | Fix the session bridge port when an externally-run API server needs a stable `UA_SESSION_BRIDGE_URL`. |
-| `UA_SHELL_PAIRING_FILE` | no | unset | Path to write the bridge address **and its capability token** for an API server you start yourself. Owner-readable only, and off by default. Delete the file once the API server has read it. |
-| `UA_PY_RUNTIME` | no | `1` | `0` starts the shell without the bundled Python runtime (and therefore without the Terminal). A runtime that fails to start never blocks the shell; the Terminal section shows the reason. |
-| `UA_PY_RUNTIME_DIR` | no | `desktop/py-runtime` (checkout) / `resources/python` (packaged) | Where `app.py` lives in development, or where the PyInstaller bundle lives in a packaged build. Jenny's `findPythonExe` locates the executable under it. |
+| `MARQUEE_WORKSPACE_UI_URL` | no | unset | Load the sidebar from a running dev server instead of the built bundle. Development only. |
+| `MARQUEE_WORKSPACE_UI_DIR` | no | `artifacts/studio/dist/public` | Built sidebar to serve from the shell's privileged origin. |
+| `MARQUEE_API_SERVER_ENTRY` | no | `artifacts/api-server/dist/index.mjs` | API server bundle the shell spawns. |
+| `MARQUEE_API_SERVER_URL` | no | unset | Use an already-running API server instead of spawning one. That server only publishes if it was itself started with `MARQUEE_SESSION_BRIDGE_URL`. |
+| `MARQUEE_SHELL_BRIDGE_PORT` | no | `0` (OS-assigned) | Fix the session bridge port when an externally-run API server needs a stable `MARQUEE_SESSION_BRIDGE_URL`. |
+| `MARQUEE_SHELL_PAIRING_FILE` | no | unset | Path to write the bridge address **and its capability token** for an API server you start yourself. Owner-readable only, and off by default. Delete the file once the API server has read it. |
+| `MARQUEE_PY_RUNTIME` | no | `1` | `0` starts the shell without the bundled Python runtime (and therefore without the Terminal). A runtime that fails to start never blocks the shell; the Terminal section shows the reason. |
+| `MARQUEE_PY_RUNTIME_DIR` | no | `desktop/py-runtime` (checkout) / `resources/python` (packaged) | Where `app.py` lives in development, or where the PyInstaller bundle lives in a packaged build. Jenny's `findPythonExe` locates the executable under it. |
 
-The shell also sets `UA_PY_RUNTIME_TOKEN` and `JENNY_PORT` for the Python
+The shell also sets `MARQUEE_PY_RUNTIME_TOKEN` and `JENNY_PORT` for the Python
 runtime it spawns — the token only for the instant of the spawn, so no other
 child inherits it. Do not set either by hand.
 
-The shell sets `UA_SESSION_BRIDGE_URL`, `UA_SESSION_BRIDGE_TOKEN`, `PORT` and
+The shell sets `MARQUEE_SESSION_BRIDGE_URL`, `MARQUEE_SESSION_BRIDGE_TOKEN`, `PORT` and
 `NEDB_DATA_DIR` for the API server it spawns; do not set those for it by hand.
 
 ## 3. Running the workspace surface
 
 ```bash
 pnpm install
-pnpm --filter @workspace/api-spec run codegen   # after any OpenAPI change
+pnpm --filter @marquee/api-spec run codegen   # after any OpenAPI change
 pnpm run typecheck                              # libs + all artifacts
 ```
 
 Both services run as Replit workflows and restart on their own:
 
 - `artifacts/api-server: API Server` → `http://localhost:8080`, mounted at `/api`
-- `artifacts/ua-social-browser: web` → the Vite dev server, preview path `/`
+- `artifacts/studio: web` → the Vite dev server, preview path `/`
 
 Smoke test the API:
 
@@ -126,7 +126,7 @@ curl -s localhost:8080/api/schedule/status
 
 Use the workspace's Publish flow (Autoscale). It deploys the sidebar UI and the
 API server. Set `AIASSIST_API_KEY` in the deployment's secrets — deployment
-secrets are separate from development secrets. Leave `UA_SESSION_BRIDGE_URL`
+secrets are separate from development secrets. Leave `MARQUEE_SESSION_BRIDGE_URL`
 unset in that environment.
 
 The ledger writes to local disk, so an Autoscale deployment treats its store as
@@ -134,7 +134,7 @@ ephemeral. Anything you want to keep lives on the desktop build.
 
 ## 5. The native shell
 
-The shell lives in `desktop/ua-shell` and is a Chromium browser built on
+The shell lives in `desktop/shell` and is a Chromium browser built on
 Electron, not a source-patched Chromium fork. Electron *is* Chromium: its
 `session.fromPartition('persist:ua-<workspaceId>')` is a real `BrowserContext`
 with its own on-disk profile directory, and CDP `Emulation.setUserAgentOverride`
@@ -147,25 +147,25 @@ build and a permanent rebase burden for capabilities already exposed here.
 pnpm install
 
 # the two halves the shell hosts
-PORT=5173 BASE_PATH=/ pnpm --filter @workspace/ua-social-browser run build
-pnpm --filter @workspace/api-server run build
+PORT=5173 BASE_PATH=/ pnpm --filter @marquee/studio run build
+pnpm --filter @marquee/api-server run build
 
 # the bundled Python (the Terminal). Once per checkout; the shell finds .venv itself.
 (cd desktop/py-runtime && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
 
-pnpm --filter @workspace/ua-shell run start   # builds, then launches Electron
+pnpm --filter @marquee/shell run start   # builds, then launches Electron
 ```
 
 Without the venv the shell still starts; the Terminal section reports that the
 runtime did not come up and names the interpreter it tried. Packaged builds
 carry Python inside the app (PyInstaller `--onedir` under `resources/python`,
-Jenny's recipe — `desktop/ua-shell/vendor/jenny/README.md`), so end users need
+Jenny's recipe — `desktop/shell/vendor/jenny/README.md`), so end users need
 no Python installed.
 
 The UI build needs `PORT` and `BASE_PATH=/`: its Vite config reads both, and the
 shell serves the bundle from the root of its own origin.
 
-`pnpm --filter @workspace/ua-shell run test` runs the shell's own suite: the
+`pnpm --filter @marquee/shell run test` runs the shell's own suite: the
 bridge contract, the idempotency ledger, UA/Client-Hints derivation, the
 privileged origin's gate, and workspace-directory parsing. None of it needs a
 display.
@@ -198,15 +198,15 @@ display.
    is served from a loopback origin that also proxies `/api` to the API server,
    so the shared UI's relative fetches work unchanged. That origin is gated by a
    random cookie set only in the privileged view's session. That one view gets a
-   preload that installs `window.uaShell`; workspace surfaces, workspace tabs,
+   preload that installs `window.marqueeShell`; workspace surfaces, workspace tabs,
    and the hidden publish window get **no preload at all**, so page content has
    no bridge, no IPC, and no route to the API. The main process also rejects any
    bridge IPC that does not come from the privileged view, and blocks that view
    from navigating off its own origin.
 5. **Publisher endpoint** — `src/session-bridge-server.ts`, bound to 127.0.0.1
    and gated by a capability token. The shell starts it *before* the API server
-   and passes its address and token as `UA_SESSION_BRIDGE_URL` and
-   `UA_SESSION_BRIDGE_TOKEN`, which is the only way an API server ever gets
+   and passes its address and token as `MARQUEE_SESSION_BRIDGE_URL` and
+   `MARQUEE_SESSION_BRIDGE_TOKEN`, which is the only way an API server ever gets
    either.
 
 ### The bridge is not "protected by loopback"
@@ -215,13 +215,13 @@ The human approval that gates publishing is enforced in the API server. Anything
 that can call the bridge directly posts through the operator's live sessions
 with no approval at all — and every other process on the machine can reach
 127.0.0.1. So the shell mints a 256-bit token at startup and refuses any bridge
-request that does not carry it in `X-UA-Shell-Token`, before parsing the body
+request that does not carry it in `X-Marquee-Shell-Token`, before parsing the body
 and before the publisher is consulted. Because it is a custom header, a web page
 cannot send it either: cross-origin requests either fail preflight (never
 approved here) or arrive without it.
 
 The token is never logged and has no default on-disk location. To pair an API
-server you start yourself, launch the shell with `UA_SHELL_PAIRING_FILE=/path`;
+server you start yourself, launch the shell with `MARQUEE_SHELL_PAIRING_FILE=/path`;
 it creates that file exclusively and owner-only (`0600`), and warns that the
 file is a live capability. Delete it after use. An existing file or a symlink at
 that path is refused rather than written through — anything already there could
@@ -233,7 +233,7 @@ The API server the shell starts inherits that capability, so reaching *it* is as
 good as reaching the bridge. Three things close that path:
 
 - it binds `127.0.0.1`, so nothing on the LAN can see it;
-- it requires `UA_API_ACCESS_TOKEN` in `X-UA-Api-Token` on every `/api` request,
+- it requires `MARQUEE_API_ACCESS_TOKEN` in `X-Marquee-Api-Token` on every `/api` request,
   and the shell's UI proxy is the only holder — an inbound copy of that header
   is dropped and replaced, so a caller cannot supply its own;
 - with the token configured, CORS is off, so no page can call it cross-origin.
@@ -241,12 +241,12 @@ good as reaching the bridge. Three things close that path:
 Everything inside the shell that talks to the API carries the token: the UI
 proxy and the workspace directory the toolbar and publisher read from.
 
-If you point the shell at your own API server with `UA_API_SERVER_URL`, that
+If you point the shell at your own API server with `MARQUEE_API_SERVER_URL`, that
 server receives the bridge capability, so gating it is **required**, not
 advisory:
 
-- run it with `HOST=127.0.0.1` and a `UA_API_ACCESS_TOKEN`;
-- start the shell with the same `UA_API_ACCESS_TOKEN`.
+- run it with `HOST=127.0.0.1` and a `MARQUEE_API_ACCESS_TOKEN`;
+- start the shell with the same `MARQUEE_API_ACCESS_TOKEN`.
 
 Without it the shell refuses to start and tells you why. It will not open the
 privileged UI or the bridge onto an ungated API server.
@@ -294,9 +294,9 @@ token and no headless impersonation anywhere in this path.
 - The publish attempt is bounded at 17s so the shell — not the API server's 20s
   timeout — decides what an unfinished attempt means.
 
-### `window.uaShell` (renderer contract)
+### `window.marqueeShell` (renderer contract)
 
-Typed in `artifacts/ua-social-browser/src/lib/shell-bridge.ts`:
+Typed in `artifacts/studio/src/lib/shell-bridge.ts`:
 
 - `attachSurface(container, options)` — mounts a workspace-isolated Chromium view
 - `openInWorkspaceTab(workspaceId, url)` — opens that workspace's tab, or steers
@@ -308,7 +308,7 @@ Typed in `artifacts/ua-social-browser/src/lib/shell-bridge.ts`:
 The shell listens on loopback; the API server calls it. Consumed by
 `artifacts/api-server/src/lib/session-bridge.ts`.
 
-Every request carries `X-UA-Shell-Token`; without it, every route answers `401`
+Every request carries `X-Marquee-Shell-Token`; without it, every route answers `401`
 with a `detail` and nothing else happens — including the sign-in route, because
 opening a tab in the operator's browser is a real side effect, not a read.
 
@@ -408,7 +408,7 @@ segments are proven only by a live publish from the Studio.
 ## 6. Scheduled dispatch
 
 An approved draft with a send time goes out on its own, without the app being
-open or focused. `src/lib/scheduler.ts` wakes on `UA_SCHEDULER_INTERVAL_MS`,
+open or focused. `src/lib/scheduler.ts` wakes on `MARQUEE_SCHEDULER_INTERVAL_MS`,
 finds drafts whose time has passed, and sends them down the same path a manual
 press uses — same approval check, same idempotency key, same bridge.
 
@@ -453,7 +453,7 @@ audience.
 X is the primary network. Also configured: Instagram, Facebook, Threads,
 LinkedIn, Bluesky, Mastodon, Reddit, TikTok, YouTube, Pinterest, Tumblr. Each
 carries its own character limit, media rules, thread support, and feed/compose
-URLs in `artifacts/ua-social-browser/src/lib/platforms.ts`. Adding a network
+URLs in `artifacts/studio/src/lib/platforms.ts`. Adding a network
 means adding an entry there and to the `platform` enum in
 `lib/api-spec/openapi.yaml`, then re-running codegen.
 
@@ -513,12 +513,12 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
 ## 10. Release checklist
 
 - [ ] `pnpm run typecheck` clean
-- [ ] `pnpm --filter @workspace/ua-shell run test` green
-- [ ] `pnpm --filter @workspace/api-server run test` green — the scheduled
+- [ ] `pnpm --filter @marquee/shell run test` green
+- [ ] `pnpm --filter @marquee/api-server run test` green — the scheduled
       dispatch suite, which needs no display either
-- [ ] `pnpm --filter @workspace/api-spec run codegen` re-run after any spec edit
+- [ ] `pnpm --filter @marquee/api-spec run codegen` re-run after any spec edit
 - [ ] `AIASSIST_API_KEY` present in the target environment
-- [ ] `UA_SESSION_BRIDGE_URL` / `UA_SESSION_BRIDGE_TOKEN` unset on the web
+- [ ] `MARQUEE_SESSION_BRIDGE_URL` / `MARQUEE_SESSION_BRIDGE_TOKEN` unset on the web
       surface; on the desktop build, confirmed to be set by the shell rather
       than by hand, and no pairing file left behind
 - [ ] Shell launched once per release: two workspaces signed into the same
