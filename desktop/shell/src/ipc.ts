@@ -64,6 +64,15 @@ export type CaptureSource = {
   thumbnail: string;
   /** Present for windows that belong to an app with an icon. */
   appIcon: string | null;
+  /**
+   * Electron's display id for a screen source; null for a window.
+   *
+   * This is the ONLY reliable join to `screen.getAllDisplays()`. The number
+   * inside the source id is Chromium's media device id and does not match it —
+   * verified the hard way, with a source reporting 400 on a machine whose only
+   * display was 60.
+   */
+  displayId: string | null;
 };
 
 export type CaptureSelection = {
@@ -83,6 +92,12 @@ export type RecordingBegun = {
   id: string;
   path: string;
   startedAt: string;
+  /**
+   * Where the cursor path is being written, or null when there is nothing to
+   * track against — a window capture, or a display the shell could not
+   * resolve. Null is a real answer the UI states rather than hides.
+   */
+  cursorTrackPath: string | null;
 };
 
 /** Mirrors `RecordingResult` in recorder.ts. */
@@ -93,14 +108,18 @@ export type RecordingClosed = {
   durationMs: number;
   chunks: number;
   clean: boolean;
+  /** The cursor track, when one was recorded. */
+  cursor: { path: string; samples: number; skipped: number; bytes: number } | null;
 };
 
 /**
- * `version` is read by the page to decide whether a capability exists. Bumped
- * to 1.1.0 for `studio.recording`: a page running against an older shell sees
- * `recording` absent and says recording is unavailable rather than throwing.
+ * `version` is read by the page to decide whether a capability exists. 1.1.0
+ * added `studio.recording`; 1.2.0 added the cursor track, which a page detects
+ * by `cursorTrackPath` being present on the begin result rather than by parsing
+ * this string. A page against an older shell sees `recording` absent and says
+ * recording is unavailable rather than throwing.
  */
-export const BRIDGE_VERSION = "1.1.0";
+export const BRIDGE_VERSION = "1.2.0";
 
 export type Rect = { x: number; y: number; width: number; height: number };
 

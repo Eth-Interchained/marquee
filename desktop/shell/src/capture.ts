@@ -33,6 +33,17 @@ export type RawSource = {
   name: string;
   thumbnail: { isEmpty(): boolean; toDataURL(): string };
   appIcon: { isEmpty(): boolean; toDataURL(): string } | null;
+  /**
+   * Electron's own display id for a screen source, as a string.
+   *
+   * MEASURED, not assumed: the number inside the source id (`screen:400:0`) is
+   * Chromium's internal media device id and does NOT match
+   * `screen.getAllDisplays()[n].id`. On this machine the source said 400 while
+   * the only display was 60. `display_id` is the documented join, and parsing
+   * the id string instead silently normalises the cursor against the wrong
+   * monitor — or, as it did here, against no monitor at all.
+   */
+  display_id?: string;
 };
 
 export function toCaptureSource(raw: RawSource): CaptureSource {
@@ -43,6 +54,7 @@ export function toCaptureSource(raw: RawSource): CaptureSource {
     kind,
     thumbnail: raw.thumbnail.isEmpty() ? "" : raw.thumbnail.toDataURL(),
     appIcon: raw.appIcon && !raw.appIcon.isEmpty() ? raw.appIcon.toDataURL() : null,
+    displayId: kind === "screen" && raw.display_id ? raw.display_id : null,
   };
 }
 

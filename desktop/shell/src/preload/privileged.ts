@@ -45,8 +45,8 @@ const host = {
     ipcRenderer.invoke(CHANNELS.permissionsRequest, { kind }),
   permissionsOpenSettings: (kind: PermissionKind): Promise<{ opened: boolean; detail: string }> =>
     ipcRenderer.invoke(CHANNELS.permissionsOpenSettings, { kind }),
-  recordingBegin: (mimeType: string, label?: string): Promise<RecordingBegun> =>
-    ipcRenderer.invoke(CHANNELS.recordingBegin, { mimeType, label }),
+  recordingBegin: (mimeType: string, label?: string, displayId?: string): Promise<RecordingBegun> =>
+    ipcRenderer.invoke(CHANNELS.recordingBegin, { mimeType, label, displayId }),
   // Takes an ArrayBuffer, not a typed array: ArrayBuffer is the shape
   // contextBridge is documented to clone, and the Uint8Array the main process
   // expects is built here on the privileged side.

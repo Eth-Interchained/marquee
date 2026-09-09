@@ -118,6 +118,16 @@ export function StudioSection({ workspace }: SectionProps) {
     error: null,
   });
   const [withSystemAudio, setWithSystemAudio] = useState(true);
+  /**
+   * The DISPLAY behind the screen layer, as Electron reports it.
+   *
+   * The shell needs this to know which display to sample the cursor against.
+   * It has to be the source's `displayId`, not its `id`: the number inside
+   * `screen:400:0` is Chromium's media device id, and on a real machine whose
+   * only display was id 60 it resolved to nothing. A window capture has no
+   * display at all, and such a take honestly gets no cursor track.
+   */
+  const screenDisplayIdRef = useRef<string | null>(null);
 
   const notify = useCallback((level: Notice['level'], text: string, raw?: string) => {
     setNotices((prev) => [{ level, text, raw, at: Date.now() }, ...prev].slice(0, 6));
@@ -371,6 +381,7 @@ export function StudioSection({ workspace }: SectionProps) {
       format: recFormat,
       label: workspace.name,
       timesliceMs: 1000,
+      displayId: screenDisplayIdRef.current ?? undefined,
       onState: setRecState,
     });
     sessionRef.current = session;
@@ -378,8 +389,21 @@ export function StudioSection({ workspace }: SectionProps) {
     try {
       const begun = await session.start();
       notify('info', `Recording to ${begun.path}`);
+      // Say when there is NO cursor track, and why. A missing track is the
+      // difference between a take that can be auto-zoomed later and one that
+      // never can, so it is not something to discover months from now.
+      if (!begun.cursorTrackPath) {
+        notify(
+          'warn',
+          screenDisplayIdRef.current
+            ? 'No cursor track for this take — the shell could not resolve the captured display, so there is no coordinate space to record the cursor in.'
+            : 'No cursor track for this take — a window capture has no display to track against, and the browser picker does not report which display was shared. Share a whole screen from the picker inside the app to get one.',
+        );
+      }
       recEventIdRef.current = await record('recording_started', {
         path: begun.path,
+        cursorTrackPath: begun.cursorTrackPath ?? null,
+        displayId: screenDisplayIdRef.current,
         mimeType: recFormat.mimeType,
         videoCodec: recFormat.videoCodec,
         canStreamCopyToMp4: recFormat.canStreamCopyToMp4,
@@ -455,7 +479,14 @@ export function StudioSection({ workspace }: SectionProps) {
       notify('info', `Recording saved: ${closed.path} (${formatBytes(closed.bytes)})`);
       const stopped = await record(
         'recording_stopped',
-        { path: closed.path, bytes: closed.bytes, durationMs: closed.durationMs, chunks: closed.chunks, clean: closed.clean },
+        {
+          path: closed.path,
+          bytes: closed.bytes,
+          durationMs: closed.durationMs,
+          chunks: closed.chunks,
+          clean: closed.clean,
+          cursor: closed.cursor ?? null,
+        },
         cause ? [cause] : [],
       );
       // Only H.264 can become an MP4 by copying. Anything else would mean a
@@ -637,7 +668,9 @@ export function StudioSection({ workspace }: SectionProps) {
 
   const openPicker = useCallback(async () => {
     if (!shell?.studio) {
-      // No shell: the browser's own picker is the only one there is.
+      // No shell: the browser's own picker is the only one there is, and it
+      // does not tell us WHICH display was shared — so no cursor track.
+      screenDisplayIdRef.current = null;
       await runScreenCapture('Screen (browser picker)');
       return;
     }
@@ -666,6 +699,7 @@ export function StudioSection({ workspace }: SectionProps) {
     async (source: ShellCaptureSource) => {
       if (!shell?.studio) return;
       setPicker((p) => ({ ...p, open: false }));
+      screenDisplayIdRef.current = source.displayId ?? null;
       try {
         await shell.studio.selectCaptureSource({ sourceId: source.id, withAudio: withSystemAudio });
       } catch (error) {

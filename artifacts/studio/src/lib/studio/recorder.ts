@@ -104,6 +104,13 @@ export type RecorderOptions = {
   format: RecordingFormat;
   label?: string;
   /**
+   * The captured display's `displayId`, as reported by the shell's picker.
+   * NOT the capture source id — the number inside that string is Chromium's
+   * media device id and does not identify a display. Omitted means no cursor
+   * track, which the shell reports rather than assumes.
+   */
+  displayId?: string;
+  /**
    * How often MediaRecorder hands over a chunk. One second keeps the write
    * volume sane while bounding what a hard crash can cost.
    */
@@ -172,7 +179,7 @@ export class RecordingSession {
     this.options.onState?.(state);
   }
 
-  async start(): Promise<{ id: string; path: string }> {
+  async start(): Promise<{ id: string; path: string; cursorTrackPath: string | null }> {
     if (this.recorder) throw new Error('This take is already recording.');
     if (this.options.stream.getVideoTracks().length === 0) {
       throw new Error('There is nothing to record — add a screen, window, or camera to the scene first.');
@@ -181,7 +188,7 @@ export class RecordingSession {
     const { format, recording, label } = this.options;
     // Open the file BEFORE starting the recorder. If the disk refuses, the
     // operator finds out now instead of after a take that went nowhere.
-    const begun = await recording.begin(format.mimeType, label);
+    const begun = await recording.begin(format.mimeType, label, this.options.displayId);
     this.handleId = begun.id;
     this.filePath = begun.path;
     this.startedAt = Date.now();
@@ -220,7 +227,7 @@ export class RecordingSession {
 
     this.recorder.start(this.options.timesliceMs ?? 1000);
     this.emit({ kind: 'recording', id: begun.id, path: begun.path, since: this.startedAt, bytes: 0, chunks: 0 });
-    return { id: begun.id, path: begun.path };
+    return { id: begun.id, path: begun.path, cursorTrackPath: begun.cursorTrackPath ?? null };
   }
 
   private enqueue(blob: Blob): void {

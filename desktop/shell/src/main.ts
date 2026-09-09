@@ -15,7 +15,7 @@
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { app, dialog, ipcMain, session, type IpcMainInvokeEvent } from "electron";
+import { app, dialog, ipcMain, screen, session, type IpcMainInvokeEvent } from "electron";
 
 import { describeConfigProblem, resolveConfig, type ShellConfig } from "./config";
 import { createLogger, errorFields } from "./logger";
@@ -25,6 +25,7 @@ import { startWorkspaceUiServer, SHELL_COOKIE_NAME, type UiServerHandle } from "
 import { startPythonRuntime, type PythonRuntimeHandle } from "./python-runtime";
 import { CaptureBroker } from "./capture";
 import { RecordingSink } from "./recorder";
+import { CursorTrack, parseDisplayId } from "./cursor-track";
 import { allPermissions, openPermissionSettings, requestPermission } from "./permissions";
 import {
   reclaimOrphanedApiServer,
@@ -441,18 +442,89 @@ function registerBridgeIpc(
     capture.select(selection);
   });
 
+  /**
+   * Cursor tracks, one per open take.
+   *
+   * The renderer cannot sample the global cursor — `getDisplayMedia` paints it
+   * into the pixels but reports no coordinates, and a page only sees pointer
+   * events inside its own window, which is useless when the whole point is
+   * recording some other application. Only this process can ask the OS.
+   */
+  const cursorTracks = new Map<string, CursorTrack>();
+
   ipcMain.handle(
     CHANNELS.recordingBegin,
-    (event, payload: { mimeType: string; label?: string }) => {
+    (event, payload: { mimeType: string; label?: string; displayId?: string }) => {
       privileged(event);
       const mimeType = payload?.mimeType;
       if (typeof mimeType !== "string" || mimeType.length === 0) {
         throw new Error("recordingBegin: mimeType is required so the file gets the right extension.");
       }
       const label = typeof payload?.label === "string" ? payload.label : undefined;
-      return recordings.begin({ mimeType, label });
+      const handle = recordings.begin({ mimeType, label });
+
+      let cursorTrackPath: string | null = null;
+      const raw = typeof payload?.displayId === "string" ? payload.displayId : null;
+      const displayId = parseDisplayId(raw);
+      if (displayId === null) {
+        // Not a failure — a window capture or a camera-only scene has no
+        // display to normalise against. Say which, so a missing track is never
+        // a mystery later.
+        log.info("recording without a cursor track", {
+          id: handle.id,
+          reason: raw ? "the captured source reported no usable display id" : "no display was named",
+          displayId: raw,
+        });
+      } else {
+        const display = screen.getAllDisplays().find((d) => d.id === displayId);
+        if (!display) {
+          log.warn("the captured display is no longer present; recording without a cursor track", {
+            id: handle.id,
+            displayId,
+            known: screen.getAllDisplays().map((d) => d.id),
+          });
+        } else {
+          try {
+            const track = new CursorTrack({
+              recordingPath: handle.path,
+              bounds: display.bounds,
+              readCursor: () => screen.getCursorScreenPoint(),
+            });
+            track.start();
+            track.startSampling();
+            cursorTracks.set(handle.id, track);
+            cursorTrackPath = track.path;
+          } catch (error) {
+            // A cursor track is a nice-to-have; the TAKE is not. Never let this
+            // failure take the recording down with it — but never hide it.
+            log.error("the cursor track could not be started; the recording continues without it", {
+              id: handle.id,
+              ...errorFields(error),
+            });
+          }
+        }
+      }
+
+      return { ...handle, cursorTrackPath };
     },
   );
+
+  /** Closes a take's cursor track, if it had one. Never throws. */
+  const closeCursorTrack = async (id: string) => {
+    const track = cursorTracks.get(id);
+    if (!track) return null;
+    cursorTracks.delete(id);
+    try {
+      const result = await track.stop();
+      return { path: result.path, samples: result.samples, skipped: result.skipped, bytes: result.bytes };
+    } catch (error) {
+      log.error("the cursor track could not be closed cleanly; the partial file is kept", {
+        id,
+        ...errorFields(error),
+      });
+      return null;
+    }
+  };
 
   ipcMain.handle(
     CHANNELS.recordingWrite,
@@ -472,12 +544,16 @@ function registerBridgeIpc(
 
   ipcMain.handle(CHANNELS.recordingFinish, async (event, payload: { id: string }) => {
     privileged(event);
-    return recordings.finish(payload?.id);
+    // Stop sampling BEFORE closing the take, so the track cannot outlive the
+    // recording it describes.
+    const cursor = await closeCursorTrack(payload?.id);
+    return { ...(await recordings.finish(payload?.id)), cursor };
   });
 
   ipcMain.handle(CHANNELS.recordingAbort, async (event, payload: { id: string }) => {
     privileged(event);
-    return recordings.abort(payload?.id);
+    const cursor = await closeCursorTrack(payload?.id);
+    return { ...(await recordings.abort(payload?.id)), cursor };
   });
 
   ipcMain.handle(CHANNELS.recordingReveal, async (event, payload: { path: string }) => {
