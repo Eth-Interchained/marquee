@@ -37,6 +37,29 @@ export function authorizationHeader(auth: WhipAuth | undefined): string | null {
   return `Basic ${b64}`;
 }
 
+/**
+ * How far to scale the canvas down for the wire. Pure; tested.
+ *
+ * The Studio composites at the display's native resolution so recordings keep
+ * their pixels, but a 4K WebRTC publish is a different proposition: mediamtx
+ * would take it, and then every viewer pays for a resolution they did not ask
+ * for while the encoder fights for real-time. WebRTC scales at the SENDER, so
+ * the file stays sharp and the stream stays sane from ONE canvas — no second
+ * render path to disagree with what you see.
+ *
+ * Returns 1 when no scaling is needed. `scaleResolutionDownBy` divides both
+ * dimensions, so the largest ratio wins.
+ */
+export function wireScaleFactor(
+  width: number,
+  height: number,
+  maxWidth = 1920,
+  maxHeight = 1080,
+): number {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return 1;
+  return Math.max(1, width / maxWidth, height / maxHeight);
+}
+
 export type WhipOptions = {
   /** e.g. https://live.example.com/whip/<path>  (mediamtx: http(s)://host:8889/<path>/whip) */
   endpoint: string;
@@ -45,6 +68,9 @@ export type WhipOptions = {
   iceServers?: RTCIceServer[];
   /** Target video bitrate in bits/s; applied via sender parameters when supported. */
   maxVideoBitrate?: number;
+  /** Largest frame to put on the wire. The canvas may be bigger; the sender scales. */
+  maxWireWidth?: number;
+  maxWireHeight?: number;
   onState?: (state: WhipState) => void;
 };
 
@@ -83,6 +109,12 @@ export function preferCodec(sdp: string, kind: 'video' | 'audio', codec: string)
 
 export class WhipPublisher {
   private pc: RTCPeerConnection | null = null;
+  /**
+   * How much the wire was scaled down from the canvas, so the UI can say the
+   * stream is 1080p while the file is 4K rather than leaving the operator to
+   * guess which resolution went where. 1 means the canvas went out untouched.
+   */
+  wireScale = 1;
   private sessionUrl: string | null = null;
   private state: WhipState = { kind: 'idle' };
   private readonly opts: WhipOptions;
@@ -112,14 +144,34 @@ export class WhipPublisher {
 
     for (const track of stream.getTracks()) {
       const sender = pc.addTransceiver(track, { direction: 'sendonly' }).sender;
-      if (track.kind === 'video' && this.opts.maxVideoBitrate) {
+      if (track.kind === 'video') {
         const params = sender.getParameters();
         params.encodings = params.encodings?.length ? params.encodings : [{}];
-        params.encodings[0].maxBitrate = this.opts.maxVideoBitrate;
+        if (this.opts.maxVideoBitrate) params.encodings[0].maxBitrate = this.opts.maxVideoBitrate;
+
+        // The canvas may be far larger than the wire should carry. Scale at the
+        // sender so the recording keeps its resolution and the stream does not.
+        const settings = (track as MediaStreamTrack).getSettings?.() ?? {};
+        const scale = wireScaleFactor(
+          settings.width ?? 0,
+          settings.height ?? 0,
+          this.opts.maxWireWidth ?? 1920,
+          this.opts.maxWireHeight ?? 1080,
+        );
+        if (scale > 1) {
+          params.encodings[0].scaleResolutionDownBy = scale;
+          this.wireScale = scale;
+        }
+
         try {
           await sender.setParameters(params);
         } catch (error) {
-          console.warn('[whip] setParameters(maxBitrate) not honoured:', error);
+          // Not fatal, but the operator should know the stream is going out at
+          // a resolution nobody chose — say what was asked for and what broke.
+          console.warn(
+            `[whip] the sender refused its parameters (maxBitrate=${this.opts.maxVideoBitrate ?? 'unset'}, scaleResolutionDownBy=${scale}); publishing at whatever the encoder picks:`,
+            error,
+          );
         }
       }
     }

@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  box16x9,
   bringToFront,
+  canvasForSource,
   clampRect,
   containFit,
   coverCrop,
@@ -9,7 +11,9 @@ import {
   hitHandle,
   hitTest,
   moveRect,
+  RECORD_PIXEL_BUDGET,
   resizeRect,
+  resizeScene,
   toNormalised,
   toPixels,
   updateLayer,
@@ -142,4 +146,91 @@ test("containFit letterboxes and centres", () => {
   assert.ok(Math.abs(f.w - 1000) < 1e-9, `w ${f.w}`);
   assert.ok(Math.abs(f.h - 562.5) < 1e-9, `h ${f.h}`);
   assert.ok(Math.abs(f.y - (1000 - 562.5) / 2) < 1e-9, `y ${f.y}`);
+});
+
+// ---------------------------------------------------------------- resolution
+
+test('canvasForSource preserves the source aspect exactly and keeps both dimensions even', () => {
+  // 1080p and 1440p pass through untouched — under budget, already even.
+  assert.deepEqual(canvasForSource(1920, 1080), { width: 1920, height: 1080 });
+  assert.deepEqual(canvasForSource(2560, 1440), { width: 2560, height: 1440 });
+  // Exactly at the budget is not over it.
+  assert.deepEqual(canvasForSource(3840, 2160), { width: 3840, height: 2160 });
+
+  // A 5K iMac (14.7M pixels) scales into the 4K budget, aspect intact.
+  const imac5k = canvasForSource(5120, 2880);
+  assert.ok(imac5k.width * imac5k.height <= RECORD_PIXEL_BUDGET, 'must not exceed the budget');
+  assert.ok(Math.abs(imac5k.width / imac5k.height - 5120 / 2880) < 0.01, 'aspect must survive scaling');
+
+  // A 16:10 MacBook display must NOT be coerced to 16:9 — letterbox bars burned
+  // into a file cannot be removed later.
+  const mbp = canvasForSource(3024, 1964);
+  assert.ok(Math.abs(mbp.width / mbp.height - 3024 / 1964) < 0.01);
+  assert.notEqual(mbp.width / mbp.height, 16 / 9);
+
+  // H.264 4:2:0 cannot represent an odd dimension.
+  for (const [w, h] of [[1919, 1079], [1001, 999], [5121, 2881], [3, 3]]) {
+    const out = canvasForSource(w, h);
+    assert.equal(out.width % 2, 0, `${w}x${h} produced an odd width`);
+    assert.equal(out.height % 2, 0, `${w}x${h} produced an odd height`);
+  }
+
+  // Never scale UP: a small window stays its own size.
+  assert.deepEqual(canvasForSource(640, 480), { width: 640, height: 480 });
+
+  // A source that reports nothing usable still yields a valid canvas.
+  assert.deepEqual(canvasForSource(0, 0), { width: 1920, height: 1080 });
+  assert.deepEqual(canvasForSource(Number.NaN, 1080), { width: 1920, height: 1080 });
+  assert.deepEqual(canvasForSource(Infinity, Infinity), { width: 1920, height: 1080 });
+});
+
+test('box16x9 gives a box that is 16:9 in PIXELS on any canvas aspect', () => {
+  const check = (w: number, cw: number, ch: number) => {
+    const box = box16x9(w, cw, ch);
+    const pixelAspect = (box.w * cw) / (box.h * ch);
+    assert.ok(Math.abs(pixelAspect - 16 / 9) < 0.001, `got ${pixelAspect} on ${cw}x${ch}`);
+  };
+  check(0.24, 1920, 1080);
+  check(0.24, 3024, 1964); // 16:10-ish laptop
+  check(0.3, 3840, 2160);
+  check(0.5, 2560, 1080); // ultrawide
+  // On a 16:9 canvas a 16:9 box has equal normalised dimensions — which is why
+  // the original hardcoded constant happened to work, and why it stopped
+  // working the moment the canvas could be any other shape.
+  assert.ok(Math.abs(box16x9(0.24, 1920, 1080).h - 0.24) < 1e-9);
+});
+
+test('resizeScene keeps layers looking the same, and keeps a full-bleed layer filling', () => {
+  const scene = defaultScene();
+  const camera = () => scene.layers.find((l) => l.id === 'camera')!;
+  const cameraOf = (s: Scene) => s.layers.find((l) => l.id === 'camera')!;
+  const screenOf = (s: Scene) => s.layers.find((l) => l.id === 'screen')!;
+
+  // Same aspect, more pixels: nothing about the layout changes.
+  const bigger = resizeScene(scene, 3840, 2160);
+  assert.deepEqual(cameraOf(bigger).rect, camera().rect);
+  assert.deepEqual(screenOf(bigger).rect, { x: 0, y: 0, w: 1, h: 1 });
+
+  // Different aspect: the camera's PIXEL aspect ratio must survive.
+  const before = camera().rect;
+  const beforeAspect = (before.w * scene.width) / (before.h * scene.height);
+  const tall = resizeScene(scene, 3024, 1964);
+  const after = cameraOf(tall).rect;
+  const afterAspect = (after.w * 3024) / (after.h * 1964);
+  assert.ok(Math.abs(beforeAspect - afterAspect) < 0.01, `camera stretched: ${beforeAspect} -> ${afterAspect}`);
+
+  // The screen layer stays full-bleed rather than being letterboxed to keep
+  // its "aspect" — that is the whole point of filling.
+  assert.deepEqual(screenOf(tall).rect, { x: 0, y: 0, w: 1, h: 1 });
+
+  // Resizing to the same size is identity, and returns the very same object so
+  // React does not re-render the scene for nothing.
+  assert.equal(resizeScene(scene, scene.width, scene.height), scene);
+
+  // Layers never escape the canvas.
+  for (const layer of resizeScene(scene, 1280, 1024).layers) {
+    assert.ok(layer.rect.x >= 0 && layer.rect.y >= 0);
+    assert.ok(layer.rect.x + layer.rect.w <= 1.0001);
+    assert.ok(layer.rect.y + layer.rect.h <= 1.0001);
+  }
 });
