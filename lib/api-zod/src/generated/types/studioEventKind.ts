@@ -19,4 +19,8 @@ export const StudioEventKind = {
   source_added: 'source_added',
   source_removed: 'source_removed',
   stream_error: 'stream_error',
+  recording_started: 'recording_started',
+  recording_stopped: 'recording_stopped',
+  recording_finalised: 'recording_finalised',
+  recording_error: 'recording_error',
 } as const;

@@ -109,13 +109,13 @@ owner, not a refactor.
 ```
 artifacts/
   studio/             React + Vite renderer: the sidebar app, Studio, Terminal
-    src/lib/studio/    Studio compositor: scene graph, canvas renderer, capture, mixer (pure, tested; from Eth-Interchained/marquee)
+    src/lib/studio/    Studio compositor: scene graph, canvas renderer, capture, mixer, recorder (pure, tested; from Eth-Interchained/marquee)
   api-server/          Express API: state, AI, scheduling, publish gateway
 desktop/
   shell/               Electron shell: the actual browser, the only publisher, and the runtime host
     vendor/jenny/      Jenny's Python orchestrator, copied VERBATIM (sha256 pinned) — never edit
     vendor/keystone-lite/  shell-path.ts, verbatim: real user PATH for a GUI-launched app
-  py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY)
+  py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY), /remux (recording -> MP4)
 deploy/
   mediamtx/            Go Live ingest config (WHIP in → HLS/WebRTC out; RTMP fan-out commented)
 lib/
@@ -138,6 +138,7 @@ lib/
 | `src/python-runtime.ts` | Starts the bundled Python through Jenny's verbatim orchestrator; mints nothing itself, wraps the token env-window and the real-PATH fix around it (see `.agents/memory/python-runtime.md`) |
 | `src/capture.ts` | Studio screen capture: lists `desktopCapturer` sources for the UI's picker and answers `getDisplayMedia()` on the default session with the ONE source the UI armed — never a guess (see `.agents/memory/studio-capture.md`) |
 | `src/permissions.ts` | OS camera/mic/screen gates: reads status, requests what the OS will actually prompt for (never screen — macOS has no API), and deep-links the rest into Settings (see `.agents/memory/os-permissions.md`) |
+| `src/recorder.ts` | Recording to disk: appends one MediaRecorder chunk per timeslice to a file in `~/Videos/marquee`, opens the fd synchronously so an unwritable path fails at the button, and NEVER deletes a take — a partial file is kept and its path reported (see `.agents/memory/studio-recording.md`) |
 | `src/session-bridge-server.ts` | Loopback HTTP the API server calls; token-gated |
 | `src/publisher/index.ts` | `sessionStatus`, `publish`, `beginSignIn` |
 | `src/publisher/adapters.ts` | Per-network cookies, composer config, sign-in URL, refusal reasons |

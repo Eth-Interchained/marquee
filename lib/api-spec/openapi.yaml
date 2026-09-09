@@ -795,7 +795,19 @@ components:
     StudioEventKind:
       type: string
       description: What happened on air. A closed list; unknown kinds are rejected.
-      enum: [go_live, stream_ended, scene_saved, source_added, source_removed, stream_error]
+      enum:
+        [
+          go_live,
+          stream_ended,
+          scene_saved,
+          source_added,
+          source_removed,
+          stream_error,
+          recording_started,
+          recording_stopped,
+          recording_finalised,
+          recording_error,
+        ]
     StudioEventInput:
       type: object
       required: [workspaceId, kind]
@@ -814,7 +826,9 @@ components:
           additionalProperties: true
           description: >-
             Kind-specific detail — the ingest endpoint and path for go_live, the
-            exit reason for stream_ended, the source label for source_added.
+            exit reason for stream_ended, the source label for source_added, the
+            file path and byte count for recording_stopped, the codecs and
+            whether the video was stream-copied for recording_finalised.
             Never a credential.
         causedBy:
           type: array

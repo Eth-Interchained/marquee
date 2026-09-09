@@ -7,6 +7,6 @@
  */
 
 /**
- * Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added. Never a credential.
+ * Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added, the file path and byte count for recording_stopped, the codecs and whether the video was stream-copied for recording_finalised. Never a credential.
  */
 export type StudioEventInputPayload = { [key: string]: unknown };

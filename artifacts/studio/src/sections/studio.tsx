@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppWindow, Camera, Clapperboard, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
+import { AppWindow, Camera, Circle, Clapperboard, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
 import {
   getGetStudioSceneQueryKey,
   getListStudioEventsQueryKey,
@@ -31,6 +31,16 @@ import { PermissionDialog, usePermissions } from '@/components/app/permission-ga
 import { Mixer } from '@/lib/studio/audio.ts';
 import { captureCamera, captureMic, captureScreen, stopStream, videoFor, type CaptureError } from '@/lib/studio/capture.ts';
 import { Compositor } from '@/lib/studio/compositor.ts';
+import {
+  finaliseToMp4,
+  formatBytes,
+  formatElapsed,
+  pickRecordingFormat,
+  RecordingSession,
+  type FinaliseResult,
+  type RecorderState,
+  type RecordingFormat,
+} from '@/lib/studio/recorder.ts';
 import { viewerUrls, WhipPublisher, type WhipState } from '@/lib/studio/whip.ts';
 import { Input } from '@/components/ui/input';
 import {
@@ -156,6 +166,20 @@ export function StudioSection({ workspace }: SectionProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene, workspace.id]);
 
+  /**
+   * The stream that leaves the Studio — the composited canvas plus the mixed
+   * audio. Shared by recording and by going live so the two can never diverge
+   * about what the viewer or the file actually gets.
+   */
+  const outgoingStream = useCallback((): { stream: MediaStream; hasAudio: boolean } | null => {
+    const comp = compositorRef.current;
+    if (!comp) return null;
+    const stream = comp.captureStream(30);
+    const mixed = mixerRef.current?.output.getAudioTracks()[0];
+    if (mixed) stream.addTrack(mixed);
+    return { stream, hasAudio: Boolean(mixed) };
+  }, []);
+
   // Go Live — one WHIP upstream to mediamtx. Settings persist per browser so
   // the operator does not retype the ingest host every session. The password
   // is kept in sessionStorage only: it leaves with the tab.
@@ -184,16 +208,14 @@ export function StudioSection({ workspace }: SectionProps) {
   const viewer = live.base ? viewerUrls(live.base, live.path) : null;
 
   const goLive = useCallback(async () => {
-    const comp = compositorRef.current;
-    if (!comp) return;
     if (!live.base) {
       notify('error', 'Set the ingest host first (e.g. https://live.example.com — mediamtx on your VPS).');
       return;
     }
-    const stream = comp.captureStream(30);
-    const mixed = mixerRef.current?.output.getAudioTracks()[0];
-    if (mixed) stream.addTrack(mixed);
-    else notify('warn', 'Going live with video only — add a microphone or share with audio for sound.');
+    const out = outgoingStream();
+    if (!out) return;
+    const stream = out.stream;
+    if (!out.hasAudio) notify('warn', 'Going live with video only — add a microphone or share with audio for sound.');
     const publisher = new WhipPublisher({
       endpoint: whipEndpoint,
       auth: live.pass ? { kind: 'basic', user: live.user, pass: live.pass } : { kind: 'none' },
@@ -210,13 +232,13 @@ export function StudioSection({ workspace }: SectionProps) {
         endpoint: whipEndpoint,
         viewer: viewer?.hls ?? null,
         sources: Object.keys(streamsRef.current),
-        audio: Boolean(mixed),
+        audio: out.hasAudio,
       });
     } catch (error) {
       publisherRef.current = null;
       notify('error', error instanceof Error ? error.message : String(error));
     }
-  }, [live, notify, record, viewer, whipEndpoint]);
+  }, [live, notify, outgoingStream, record, viewer, whipEndpoint]);
 
   const endLive = useCallback(async () => {
     const p = publisherRef.current;
@@ -263,6 +285,174 @@ export function StudioSection({ workspace }: SectionProps) {
       void record('stream_error', { message: whip.message }, [cause]);
     }
   }, [record, whip]);
+
+  // ---- Recording: the primary act ----------------------------------------
+  //
+  // Going live is an option; recording is what the app is for. A take is
+  // written straight to disk by the shell, one chunk per second, and finalised
+  // to a real MP4 by the bundled Python. The reason it is a two-step is
+  // measured, not stylistic: Chromium's MediaRecorder will give you H.264 or
+  // an MP4 container, never both (see lib/studio/recorder.ts).
+  const recording = shell?.studio?.recording ?? null;
+  /** What this machine can actually record. Probed once — it cannot change. */
+  const recFormat = useMemo<RecordingFormat | null>(() => {
+    if (typeof MediaRecorder === 'undefined') return null;
+    return pickRecordingFormat((type) => MediaRecorder.isTypeSupported(type));
+  }, []);
+  const [recState, setRecState] = useState<RecorderState>({ kind: 'idle' });
+  const [take, setTake] = useState<{ path: string; bytes: number; durationMs: number; mp4: FinaliseResult | null } | null>(null);
+  const [finalising, setFinalising] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const sessionRef = useRef<RecordingSession | null>(null);
+  const recEventIdRef = useRef<string | null>(null);
+  const isRecording = recState.kind === 'recording' || recState.kind === 'paused';
+
+  // The clock the operator watches. Driven off the state's own start time, so
+  // a re-render cannot make it jump.
+  useEffect(() => {
+    if (!isRecording) return;
+    const since = recState.kind === 'recording' || recState.kind === 'paused' ? recState.since : Date.now();
+    const tick = () => setElapsed(Date.now() - since);
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, [isRecording, recState]);
+
+  const startRecording = useCallback(async () => {
+    if (!recording) {
+      notify('error', 'Recording needs the desktop shell — the web surface cannot write to your disk.');
+      return;
+    }
+    if (!recFormat) {
+      notify('error', 'This build has no MediaRecorder format it can use, so it cannot record. Please report this.');
+      return;
+    }
+    if (!sources.screen && !sources.camera) {
+      notify('error', 'Add a screen, window, or camera first — there is nothing to record yet.');
+      return;
+    }
+    if (raisePermissions('recording')) return;
+
+    const out = outgoingStream();
+    if (!out) return;
+    if (!out.hasAudio) notify('warn', 'Recording video only — add a microphone, or share with audio, for sound.');
+    if (!recFormat.canStreamCopyToMp4) notify('warn', recFormat.note);
+
+    const session = new RecordingSession({
+      stream: out.stream,
+      recording,
+      format: recFormat,
+      label: workspace.name,
+      timesliceMs: 1000,
+      onState: setRecState,
+    });
+    sessionRef.current = session;
+    setTake(null);
+    try {
+      const begun = await session.start();
+      notify('info', `Recording to ${begun.path}`);
+      recEventIdRef.current = await record('recording_started', {
+        path: begun.path,
+        mimeType: recFormat.mimeType,
+        videoCodec: recFormat.videoCodec,
+        canStreamCopyToMp4: recFormat.canStreamCopyToMp4,
+        audio: out.hasAudio,
+        sources: Object.keys(streamsRef.current),
+        width: scene.width,
+        height: scene.height,
+      });
+    } catch (error) {
+      sessionRef.current = null;
+      const message = error instanceof Error ? error.message : String(error);
+      notify('error', message);
+      // A take that never started is still worth a receipt: it is the record
+      // of a machine that could not record, which is exactly what you want
+      // when someone reports "it did nothing".
+      await record('recording_error', { phase: 'start', message, mimeType: recFormat.mimeType });
+    }
+  }, [notify, outgoingStream, raisePermissions, recFormat, record, recording, scene.height, scene.width, sources.camera, sources.screen, workspace.name]);
+
+  /**
+   * Finalise a take to MP4 through the bundled Python. Separate from stopping
+   * so a finalise that fails never looks like a recording that failed — the
+   * Matroska on disk is already a complete, playable recording.
+   */
+  const finalise = useCallback(
+    async (source: string, cause: string | null) => {
+      setFinalising(true);
+      try {
+        const result = await finaliseToMp4(source);
+        setTake((t) => (t ? { ...t, mp4: result } : t));
+        notify(
+          'info',
+          `MP4 ready: ${result.output} (${result.videoCodec}/${result.audioCodec}, ${result.videoWasCopied ? 'video copied' : 'video re-encoded'}, ${result.tookSeconds}s)`,
+        );
+        await record(
+          'recording_finalised',
+          {
+            source: result.source,
+            output: result.output,
+            outputBytes: result.outputBytes,
+            durationSeconds: result.durationSeconds,
+            videoCodec: result.videoCodec,
+            audioCodec: result.audioCodec,
+            videoWasCopied: result.videoWasCopied,
+            tookSeconds: result.tookSeconds,
+            notes: result.notes,
+          },
+          cause ? [cause] : [],
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Say plainly what survived. The recording is not lost; only the MP4
+        // conversion failed, and conflating the two would send the operator
+        // looking for a file that is right there.
+        notify('error', `${message} The recording itself is intact at ${source}.`);
+        await record('recording_error', { phase: 'finalise', source, message }, cause ? [cause] : []);
+      } finally {
+        setFinalising(false);
+      }
+    },
+    [notify, record],
+  );
+
+  const stopRecording = useCallback(async () => {
+    const session = sessionRef.current;
+    if (!session) return;
+    sessionRef.current = null;
+    const cause = recEventIdRef.current;
+    recEventIdRef.current = null;
+    try {
+      const closed = await session.stop();
+      setTake({ path: closed.path, bytes: closed.bytes, durationMs: closed.durationMs, mp4: null });
+      notify('info', `Recording saved: ${closed.path} (${formatBytes(closed.bytes)})`);
+      const stopped = await record(
+        'recording_stopped',
+        { path: closed.path, bytes: closed.bytes, durationMs: closed.durationMs, chunks: closed.chunks, clean: closed.clean },
+        cause ? [cause] : [],
+      );
+      // Only H.264 can become an MP4 by copying. Anything else would mean a
+      // slow, lossy re-encode, so it stays a WebM and the panel says why.
+      if (recFormat?.canStreamCopyToMp4) await finalise(closed.path, stopped ?? cause);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notify('error', message);
+      await record('recording_error', { phase: 'stop', message }, cause ? [cause] : []);
+    }
+  }, [finalise, notify, recFormat, record]);
+
+  // Leaving the section must not leave a file half-written. Abort keeps it.
+  useEffect(() => {
+    return () => {
+      const session = sessionRef.current;
+      sessionRef.current = null;
+      if (session) {
+        void session.stop().catch((error: unknown) => {
+          console.error('[studio] a recording was still open when the section closed; the partial file was kept', error);
+        });
+      }
+    };
+  }, []);
 
   // Compositor lifetime = section lifetime.
   useEffect(() => {
@@ -534,16 +724,43 @@ export function StudioSection({ workspace }: SectionProps) {
       title="Studio"
       description={
         shellPicker
-          ? `Screen or game, your camera in the corner, a mixer — one canvas, which is the preview now and the broadcast next. Captured through the shell's own picker in the ${workspace.name} workspace.`
-          : 'Screen or game, your camera in the corner, a mixer — one canvas. On the web surface the browser’s own share picker is used; inside the shell you get a proper source picker with thumbnails.'
+          ? `Screen or game, your camera in the corner, a mixer — one canvas. Record it to MP4, or go live. Captured through the shell's own picker in the ${workspace.name} workspace.`
+          : 'Screen or game, your camera in the corner, a mixer — one canvas. Recording writes to disk, so it needs the desktop shell; on the web surface you get the preview, the browser’s own share picker, and Go Live.'
       }
       actions={
         <>
           <Badge variant="outline" className="font-mono text-[10px]" data-testid="badge-studio-stats">
             {scene.width}×{scene.height} · {fps} fps
           </Badge>
+          {/* Record is the primary action: this is a recorder that can also
+              broadcast, not a broadcaster that can also record. */}
+          {isRecording ? (
+            <Button size="sm" variant="destructive" onClick={() => void stopRecording()} data-testid="button-stop-recording">
+              <Square className="mr-1.5 h-3.5 w-3.5" />
+              Stop · {formatElapsed(elapsed)}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={!recording || !recFormat || finalising || (!sources.screen && !sources.camera)}
+              onClick={() => void startRecording()}
+              data-testid="button-record"
+              title={
+                !recording
+                  ? 'Recording needs the desktop shell.'
+                  : !recFormat
+                    ? 'No recordable format on this machine.'
+                    : !sources.screen && !sources.camera
+                      ? 'Add a screen, window, or camera first.'
+                      : `Records ${recFormat.videoCodec.toUpperCase()} to your Videos folder.`
+              }
+            >
+              <Circle className="mr-1.5 h-3.5 w-3.5 fill-current" />
+              {finalising ? 'Finalising…' : 'Record'}
+            </Button>
+          )}
           {whip.kind === 'live' ? (
-            <Button size="sm" variant="destructive" onClick={() => void endLive()} data-testid="button-end-live">
+            <Button size="sm" variant="outline" className="border-destructive/60 text-destructive" onClick={() => void endLive()} data-testid="button-end-live">
               <Square className="mr-1.5 h-3.5 w-3.5" />
               End stream
             </Button>
@@ -551,8 +768,7 @@ export function StudioSection({ workspace }: SectionProps) {
             <Button
               size="sm"
               variant="outline"
-              className="border-destructive/60 text-destructive"
-              disabled={whip.kind === 'connecting' || !sources.screen && !sources.camera}
+              disabled={whip.kind === 'connecting' || (!sources.screen && !sources.camera)}
               onClick={() => void goLive()}
               data-testid="button-go-live"
             >
@@ -560,7 +776,7 @@ export function StudioSection({ workspace }: SectionProps) {
               {whip.kind === 'connecting' ? 'Connecting…' : 'Go live'}
             </Button>
           )}
-          <Button size="sm" onClick={openPicker} data-testid="button-share-screen">
+          <Button size="sm" variant="outline" onClick={openPicker} data-testid="button-share-screen">
             <MonitorUp className="mr-1.5 h-3.5 w-3.5" />
             {sources.screen ? 'Change screen' : 'Share screen / game'}
           </Button>
@@ -719,6 +935,108 @@ export function StudioSection({ workspace }: SectionProps) {
                   </div>
                 ))
               )}
+            </CardContent>
+          </Card>
+
+          <Card className={cn(isRecording && 'border-destructive/60')} data-testid="card-recording">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Circle className={cn('h-3.5 w-3.5', isRecording && 'animate-pulse fill-destructive text-destructive')} /> Recording
+                {isRecording ? (
+                  <Badge variant="destructive" className="ml-auto font-mono text-[10px]" data-testid="badge-recording">
+                    REC · {formatElapsed(elapsed)}
+                  </Badge>
+                ) : recFormat ? (
+                  <Badge variant="outline" className="ml-auto font-mono text-[10px]" data-testid="badge-rec-format">
+                    {recFormat.videoCodec}
+                  </Badge>
+                ) : null}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              {!recording ? (
+                <p className="text-xs text-muted-foreground">
+                  Recording writes to your disk, so it needs the desktop shell. On the web surface only the preview and Go Live are available.
+                </p>
+              ) : !recFormat ? (
+                <p className="rounded-md border-l-2 border-destructive bg-background/40 px-2.5 py-1.5 text-xs">
+                  This build has no MediaRecorder format it can use. Recording is unavailable — please report this.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">{recFormat.note}</p>
+              )}
+
+              {isRecording ? (
+                <>
+                  <div className="flex items-baseline justify-between font-mono text-xs">
+                    <span className="text-2xl tabular-nums">{formatElapsed(elapsed)}</span>
+                    <span className="text-muted-foreground" data-testid="text-recording-size">
+                      {formatBytes(recState.kind === 'recording' || recState.kind === 'paused' ? recState.bytes : 0)}
+                    </span>
+                  </div>
+                  <p className="break-all font-mono text-[10px] text-muted-foreground">
+                    {recState.kind === 'recording' || recState.kind === 'paused' ? recState.path : ''}
+                  </p>
+                  <div className="flex gap-2">
+                    {recState.kind === 'paused' ? (
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => sessionRef.current?.resume()} data-testid="button-resume-recording">
+                        Resume
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => sessionRef.current?.pause()} data-testid="button-pause-recording">
+                        Pause
+                      </Button>
+                    )}
+                    <Button size="sm" variant="destructive" className="flex-1" onClick={() => void stopRecording()}>
+                      <Square className="mr-1.5 h-3 w-3" /> Stop
+                    </Button>
+                  </div>
+                </>
+              ) : null}
+
+              {recState.kind === 'error' ? (
+                <p className="rounded-md border-l-2 border-destructive bg-background/40 px-2.5 py-1.5 text-xs" data-testid="text-recording-error">
+                  {recState.message}
+                </p>
+              ) : null}
+
+              {take && !isRecording ? (
+                <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-border/60 bg-background/40 p-2">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <FileVideo className="h-3.5 w-3.5 text-chart-1" />
+                    <span className="font-medium">Last take</span>
+                    <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                      {formatElapsed(take.durationMs)} · {formatBytes(take.bytes)}
+                    </span>
+                  </div>
+                  {/* The MP4 is a second artifact, so both paths are shown: a
+                      finalise that fails must never look like a lost take. */}
+                  <p className="break-all font-mono text-[10px] text-muted-foreground" data-testid="text-take-path">{take.path}</p>
+                  {take.mp4 ? (
+                    <>
+                      <p className="break-all font-mono text-[10px] text-chart-1" data-testid="text-take-mp4">{take.mp4.output}</p>
+                      <p className="font-mono text-[10px] text-muted-foreground">
+                        {take.mp4.videoCodec}/{take.mp4.audioCodec} · {take.mp4.videoWasCopied ? 'video copied' : 're-encoded'} · {take.mp4.tookSeconds}s
+                      </p>
+                    </>
+                  ) : finalising ? (
+                    <p className="font-mono text-[10px] text-muted-foreground">Finalising to MP4…</p>
+                  ) : (
+                    <Button size="sm" variant="outline" className="h-7" onClick={() => void finalise(take.path, null)} data-testid="button-finalise">
+                      Finalise to MP4
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 justify-start px-1.5 text-[11px]"
+                    onClick={() => void recording?.revealInFolder(take.mp4?.output ?? take.path)}
+                    data-testid="button-reveal"
+                  >
+                    <FolderOpen className="mr-1.5 h-3 w-3" /> Show in folder
+                  </Button>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -893,6 +1211,10 @@ const KIND_LABEL: Record<StudioEventKind, string> = {
   scene_saved: 'scene saved',
   source_added: 'source added',
   source_removed: 'source removed',
+  recording_started: 'recording started',
+  recording_stopped: 'recording saved',
+  recording_finalised: 'MP4 finalised',
+  recording_error: 'recording error',
 };
 
 /**
@@ -939,6 +1261,10 @@ function ReceiptsCard({
                   e.kind === 'stream_error' && 'bg-chart-3',
                   e.kind === 'scene_saved' && 'bg-chart-1',
                   (e.kind === 'source_added' || e.kind === 'source_removed') && 'bg-chart-2',
+                  e.kind === 'recording_started' && 'bg-destructive',
+                  e.kind === 'recording_stopped' && 'bg-chart-1',
+                  e.kind === 'recording_finalised' && 'bg-chart-4',
+                  e.kind === 'recording_error' && 'bg-chart-3',
                 )}
               />
               <span>{KIND_LABEL[e.kind] ?? e.kind}</span>

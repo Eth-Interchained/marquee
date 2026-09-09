@@ -54,6 +54,36 @@ export type ShellCaptureSelection = {
   withAudio: boolean;
 };
 
+/** What the shell reports when a take opens. Mirrors `RecordingBegun` in ipc.ts. */
+export type ShellRecordingBegun = {
+  id: string;
+  /** The real path on disk. Shown to the operator — never guessed at here. */
+  path: string;
+  startedAt: string;
+};
+
+/** Mirrors `RecordingClosed` in ipc.ts. */
+export type ShellRecordingClosed = {
+  id: string;
+  path: string;
+  bytes: number;
+  durationMs: number;
+  chunks: number;
+  /** False when the shell closed the take itself (quit mid-recording). */
+  clean: boolean;
+};
+
+export type ShellRecording = {
+  /** Opens a file and returns its real path. */
+  begin(mimeType: string, label?: string): Promise<ShellRecordingBegun>;
+  /** Appends one MediaRecorder chunk. Pass the Blob; the bridge reads it. */
+  writeChunk(id: string, blob: Blob): Promise<{ bytes: number; chunks: number }>;
+  finish(id: string): Promise<ShellRecordingClosed>;
+  /** Ends a take that went wrong. The partial file is KEPT. */
+  abort(id: string): Promise<ShellRecordingClosed>;
+  revealInFolder(path: string): Promise<{ revealed: boolean; path: string }>;
+};
+
 export type MarqueeShellBridge = {
   readonly version: string;
   /** Mounts a workspace-isolated browsing surface into the given element. */
@@ -72,6 +102,13 @@ export type MarqueeShellBridge = {
     listCaptureSources(): Promise<ShellCaptureSource[]>;
     /** Arms the shell's display-media handler for the NEXT getDisplayMedia(). `null` disarms. */
     selectCaptureSource(selection: ShellCaptureSelection | null): Promise<void>;
+    /**
+     * Recording straight to disk. Absent on shells before bridge 1.1.0 —
+     * check for it and say recording is unavailable rather than throwing,
+     * because this is the app's primary function and a silent failure here is
+     * a lost take.
+     */
+    recording?: ShellRecording;
   };
   /** OS capture permissions. Absent on older shells. */
   permissions?: {
