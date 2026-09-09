@@ -210,17 +210,30 @@ export async function startApiServer(options: {
   }
 
   let exited = false;
+  // Set the moment WE ask the child to stop. Without it every clean quit logs
+  // a warning about the API server exiting, which is indistinguishable from
+  // the child dying on its own — and a warning that fires on every normal
+  // exit teaches you to ignore warnings.
+  let stopRequested = false;
   child.on("exit", (code, signal) => {
     exited = true;
     if (options.pidFile) forget(options.pidFile);
-    log.warn("API server exited", { code, signal });
+    if (stopRequested) {
+      log.info("API server stopped", { code, signal });
+    } else {
+      // Nobody asked for this. A SIGTERM here came from outside the shell.
+      log.warn("API server exited on its own", { code, signal });
+    }
   });
 
   // The child holds an exclusive lock on the data directory, and nothing in
   // the OS ends it when this process goes. Any exit that runs JavaScript at
   // all takes it down; the pid file covers the ones that do not.
   const killOnExit = () => {
-    if (!exited) child.kill("SIGTERM");
+    if (!exited) {
+      stopRequested = true;
+      child.kill("SIGTERM");
+    }
   };
   process.once("exit", killOnExit);
 
@@ -229,6 +242,7 @@ export async function startApiServer(options: {
       "X-Marquee-Api-Token": options.accessToken,
     });
   } catch (error) {
+    stopRequested = true;
     child.kill("SIGTERM");
     const reason = error instanceof Error ? error.message : String(error);
     const output = tail.join("\n");
@@ -251,6 +265,7 @@ export async function startApiServer(options: {
     baseUrl,
     stop: () =>
       new Promise<void>((resolve) => {
+        stopRequested = true;
         process.removeListener("exit", killOnExit);
         if (exited || child.killed) {
           if (options.pidFile) forget(options.pidFile);
