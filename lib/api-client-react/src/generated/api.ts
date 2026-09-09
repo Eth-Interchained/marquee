@@ -27,6 +27,7 @@ import type {
   AiSuggestionResult,
   GetSessionStatusParams,
   HealthStatus,
+  ListStudioEventsParams,
   PublishRequest,
   PublishResult,
   SessionStatus,
@@ -34,6 +35,13 @@ import type {
   SignInRequest,
   SignOutRequest,
   SignOutResult,
+  StudioEventInput,
+  StudioEventList,
+  StudioEventReceipt,
+  StudioEventTrace,
+  StudioSceneDocument,
+  StudioSceneInput,
+  StudioSceneSaved,
   TenantInfo,
   UploadedMedia
 } from './api.schemas';
@@ -887,5 +895,388 @@ export const useCreateAiBrief = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getCreateAiBriefMutationOptions(options));
+    }
+
+export const getListStudioEventsUrl = (params: ListStudioEventsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/studio/events?${stringifiedParams}` : `/api/studio/events`
+}
+
+/**
+ * Every go-live, stream end, scene save and source change is an append-only document in the local NEDB store, chained to what caused it. This is the receipt trail: what appeared on air, and why.
+ * @summary The Studio's event log for a workspace, newest first
+ */
+export const listStudioEvents = async (params: ListStudioEventsParams, options?: Parameters<typeof customFetch>[1]): Promise<StudioEventList> => {
+
+  return customFetch<StudioEventList>(getListStudioEventsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListStudioEventsQueryKey = (params?: ListStudioEventsParams,) => {
+    return [
+    `/api/studio/events`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListStudioEventsQueryOptions = <TData = Awaited<ReturnType<typeof listStudioEvents>>, TError = ErrorType<unknown>>(params: ListStudioEventsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listStudioEvents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListStudioEventsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listStudioEvents>>> = ({ signal }) => listStudioEvents(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listStudioEvents>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListStudioEventsQueryResult = NonNullable<Awaited<ReturnType<typeof listStudioEvents>>>
+export type ListStudioEventsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary The Studio's event log for a workspace, newest first
+ */
+
+export function useListStudioEvents<TData = Awaited<ReturnType<typeof listStudioEvents>>, TError = ErrorType<unknown>>(
+ params: ListStudioEventsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listStudioEvents>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListStudioEventsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRecordStudioEventUrl = () => {
+
+
+
+
+  return `/api/studio/events`
+}
+
+/**
+ * Appends one event. `causedBy` names earlier event ids; each becomes a `caused_by` edge in the store's graph so TRACE can walk from an alert or a stream back to what produced it. The previous event on the same workspace is linked automatically, so the chain is never broken by a caller that forgot.
+ * @summary Record a Studio event with its causes
+ */
+export const recordStudioEvent = async (studioEventInput: StudioEventInput, options?: Parameters<typeof customFetch>[1]): Promise<StudioEventReceipt> => {
+
+  return customFetch<StudioEventReceipt>(getRecordStudioEventUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(studioEventInput)
+  }
+);}
+
+
+
+
+
+export const getRecordStudioEventMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordStudioEvent>>, TError,{data: BodyType<StudioEventInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof recordStudioEvent>>, TError,{data: BodyType<StudioEventInput>}, TContext> => {
+
+const mutationKey = ['recordStudioEvent'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordStudioEvent>>, {data: BodyType<StudioEventInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  recordStudioEvent(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RecordStudioEventMutationResult = NonNullable<Awaited<ReturnType<typeof recordStudioEvent>>>
+    export type RecordStudioEventMutationBody = BodyType<StudioEventInput>
+    export type RecordStudioEventMutationError = ErrorType<void>
+
+    /**
+ * @summary Record a Studio event with its causes
+ */
+export const useRecordStudioEvent = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordStudioEvent>>, TError,{data: BodyType<StudioEventInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof recordStudioEvent>>,
+        TError,
+        {data: BodyType<StudioEventInput>},
+        TContext
+      > => {
+      return useMutation(getRecordStudioEventMutationOptions(options));
+    }
+
+export const getTraceStudioEventUrl = (id: string,) => {
+
+
+
+
+  return `/api/studio/events/${id}/trace`
+}
+
+/**
+ * @summary Causes and effects of one event
+ */
+export const traceStudioEvent = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<StudioEventTrace> => {
+
+  return customFetch<StudioEventTrace>(getTraceStudioEventUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getTraceStudioEventQueryKey = (id: string,) => {
+    return [
+    `/api/studio/events/${id}/trace`
+    ] as const;
+    }
+
+
+export const getTraceStudioEventQueryOptions = <TData = Awaited<ReturnType<typeof traceStudioEvent>>, TError = ErrorType<void>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof traceStudioEvent>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getTraceStudioEventQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof traceStudioEvent>>> = ({ signal }) => traceStudioEvent(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof traceStudioEvent>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type TraceStudioEventQueryResult = NonNullable<Awaited<ReturnType<typeof traceStudioEvent>>>
+export type TraceStudioEventQueryError = ErrorType<void>
+
+
+/**
+ * @summary Causes and effects of one event
+ */
+
+export function useTraceStudioEvent<TData = Awaited<ReturnType<typeof traceStudioEvent>>, TError = ErrorType<void>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof traceStudioEvent>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getTraceStudioEventQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetStudioSceneUrl = (workspaceId: string,) => {
+
+
+
+
+  return `/api/studio/scenes/${workspaceId}`
+}
+
+/**
+ * @summary The saved scene for a workspace
+ */
+export const getStudioScene = async (workspaceId: string, options?: Parameters<typeof customFetch>[1]): Promise<StudioSceneDocument> => {
+
+  return customFetch<StudioSceneDocument>(getGetStudioSceneUrl(workspaceId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetStudioSceneQueryKey = (workspaceId: string,) => {
+    return [
+    `/api/studio/scenes/${workspaceId}`
+    ] as const;
+    }
+
+
+export const getGetStudioSceneQueryOptions = <TData = Awaited<ReturnType<typeof getStudioScene>>, TError = ErrorType<void>>(workspaceId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStudioScene>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetStudioSceneQueryKey(workspaceId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStudioScene>>> = ({ signal }) => getStudioScene(workspaceId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: workspaceId !== null && workspaceId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getStudioScene>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetStudioSceneQueryResult = NonNullable<Awaited<ReturnType<typeof getStudioScene>>>
+export type GetStudioSceneQueryError = ErrorType<void>
+
+
+/**
+ * @summary The saved scene for a workspace
+ */
+
+export function useGetStudioScene<TData = Awaited<ReturnType<typeof getStudioScene>>, TError = ErrorType<void>>(
+ workspaceId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStudioScene>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetStudioSceneQueryOptions(workspaceId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSaveStudioSceneUrl = (workspaceId: string,) => {
+
+
+
+
+  return `/api/studio/scenes/${workspaceId}`
+}
+
+/**
+ * @summary Save the scene and record a scene_saved event
+ */
+export const saveStudioScene = async (workspaceId: string,
+    studioSceneInput: StudioSceneInput, options?: Parameters<typeof customFetch>[1]): Promise<StudioSceneSaved> => {
+
+  return customFetch<StudioSceneSaved>(getSaveStudioSceneUrl(workspaceId),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(studioSceneInput)
+  }
+);}
+
+
+
+
+
+export const getSaveStudioSceneMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveStudioScene>>, TError,{workspaceId: string;data: BodyType<StudioSceneInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof saveStudioScene>>, TError,{workspaceId: string;data: BodyType<StudioSceneInput>}, TContext> => {
+
+const mutationKey = ['saveStudioScene'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof saveStudioScene>>, {workspaceId: string;data: BodyType<StudioSceneInput>}> = (props) => {
+          const {workspaceId,data} = props ?? {};
+
+          return  saveStudioScene(workspaceId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SaveStudioSceneMutationResult = NonNullable<Awaited<ReturnType<typeof saveStudioScene>>>
+    export type SaveStudioSceneMutationBody = BodyType<StudioSceneInput>
+    export type SaveStudioSceneMutationError = ErrorType<void>
+
+    /**
+ * @summary Save the scene and record a scene_saved event
+ */
+export const useSaveStudioScene = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveStudioScene>>, TError,{workspaceId: string;data: BodyType<StudioSceneInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof saveStudioScene>>,
+        TError,
+        {workspaceId: string;data: BodyType<StudioSceneInput>},
+        TContext
+      > => {
+      return useMutation(getSaveStudioSceneMutationOptions(options));
     }
 

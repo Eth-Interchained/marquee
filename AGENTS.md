@@ -136,7 +136,10 @@ scripts/               template leftover
 Routes (all under `/api`): `/healthz`, `/tenant`, `/browser/state` (GET/PUT),
 `/browser/integrity`, `/browser/export`, `/ai/models`, `/ai/suggest`,
 `/session/status`, `/session/signin`, `/publish`, `/schedule/status`,
-`/schedule/dispatches`, `/schedule/outcomes`.
+`/schedule/dispatches`, `/schedule/outcomes`, and the Studio's receipts:
+`/studio/events` (GET/POST), `/studio/events/{id}/trace`,
+`/studio/scenes/{workspaceId}` (GET/PUT) — `src/lib/studio-store.ts`, see
+`.agents/memory/studio-receipts.md`.
 
 `src/lib/session-bridge.ts` is the only place that talks to the shell (20s
 request timeout). `src/lib/scheduler.ts` runs the clock; `dispatch-claims.ts`

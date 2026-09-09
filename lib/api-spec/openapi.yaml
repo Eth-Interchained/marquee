@@ -16,6 +16,8 @@ tags:
     description: Human-approved publishing through an authenticated workspace session
   - name: tenancy
     description: Tenant resolution for the current request
+  - name: studio
+    description: The Studio's receipts — go-live, scene and source events chained by cause in the local store
 paths:
   /tenant:
     get:
@@ -278,6 +280,119 @@ paths:
           description: Invalid request
         "502":
           description: AiAssist request failed
+  /studio/events:
+    get:
+      operationId: listStudioEvents
+      tags: [studio]
+      summary: The Studio's event log for a workspace, newest first
+      description: >-
+        Every go-live, stream end, scene save and source change is an
+        append-only document in the local NEDB store, chained to what caused
+        it. This is the receipt trail: what appeared on air, and why.
+      parameters:
+        - in: query
+          name: workspaceId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: number, minimum: 1, maximum: 500, default: 50 }
+      responses:
+        "200":
+          description: Events newest first, with the store's integrity head
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioEventList"
+    post:
+      operationId: recordStudioEvent
+      tags: [studio]
+      summary: Record a Studio event with its causes
+      description: >-
+        Appends one event. `causedBy` names earlier event ids; each becomes a
+        `caused_by` edge in the store's graph so TRACE can walk from an alert
+        or a stream back to what produced it. The previous event on the same
+        workspace is linked automatically, so the chain is never broken by a
+        caller that forgot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioEventInput"
+      responses:
+        "201":
+          description: The stored event and the receipt (store head after the write)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioEventReceipt"
+        "400":
+          description: Invalid event
+        "404":
+          description: A cause named in causedBy does not exist
+  /studio/events/{id}/trace:
+    get:
+      operationId: traceStudioEvent
+      tags: [studio]
+      summary: Causes and effects of one event
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The event, what caused it (transitively), and what it caused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioEventTrace"
+        "404":
+          description: No such event
+  /studio/scenes/{workspaceId}:
+    get:
+      operationId: getStudioScene
+      tags: [studio]
+      summary: The saved scene for a workspace
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The scene document as last saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioSceneDocument"
+        "404":
+          description: No scene saved yet
+    put:
+      operationId: saveStudioScene
+      tags: [studio]
+      summary: Save the scene and record a scene_saved event
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StudioSceneInput"
+      responses:
+        "200":
+          description: The stored scene and the scene_saved event's receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudioSceneSaved"
+        "400":
+          description: Invalid scene
 components:
   schemas:
     HealthStatus:
@@ -677,3 +792,128 @@ components:
         message:
           type: string
 
+    StudioEventKind:
+      type: string
+      description: What happened on air. A closed list; unknown kinds are rejected.
+      enum: [go_live, stream_ended, scene_saved, source_added, source_removed, stream_error]
+    StudioEventInput:
+      type: object
+      required: [workspaceId, kind]
+      properties:
+        workspaceId:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/StudioEventKind"
+        at:
+          type: string
+          format: date-time
+          description: When it happened on the operator's clock. Defaults to now.
+        payload:
+          type: object
+          additionalProperties: true
+          description: >-
+            Kind-specific detail — the ingest endpoint and path for go_live, the
+            exit reason for stream_ended, the source label for source_added.
+            Never a credential.
+        causedBy:
+          type: array
+          items: { type: string }
+          maxItems: 16
+          description: Ids of earlier events this one follows from.
+    StudioEvent:
+      type: object
+      required: [id, workspaceId, kind, at, payload, causedBy, seq]
+      properties:
+        id: { type: string }
+        workspaceId: { type: string }
+        kind:
+          $ref: "#/components/schemas/StudioEventKind"
+        at: { type: string, format: date-time }
+        payload:
+          type: object
+          additionalProperties: true
+        causedBy:
+          type: array
+          items: { type: string }
+        seq:
+          type: number
+          description: The store's sequence number when this event was written.
+    StoreReceipt:
+      type: object
+      required: [head, seq, verified]
+      description: >-
+        The store's Merkle head and sequence right after a write, and whether the
+        whole chain still verifies. This is what makes an event a receipt rather
+        than a log line.
+      properties:
+        head: { type: string }
+        seq: { type: number }
+        verified: { type: boolean }
+    StudioEventReceipt:
+      type: object
+      required: [event, receipt]
+      properties:
+        event:
+          $ref: "#/components/schemas/StudioEvent"
+        receipt:
+          $ref: "#/components/schemas/StoreReceipt"
+    StudioEventList:
+      type: object
+      required: [events, receipt]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/StudioEvent"
+        receipt:
+          $ref: "#/components/schemas/StoreReceipt"
+    StudioEventTrace:
+      type: object
+      required: [event, causes, effects]
+      properties:
+        event:
+          $ref: "#/components/schemas/StudioEvent"
+        causes:
+          type: array
+          description: Transitive causes, nearest first.
+          items:
+            $ref: "#/components/schemas/StudioEvent"
+        effects:
+          type: array
+          description: Direct effects — events that name this one as a cause.
+          items:
+            $ref: "#/components/schemas/StudioEvent"
+    StudioSceneInput:
+      type: object
+      required: [scene]
+      properties:
+        scene:
+          type: object
+          additionalProperties: true
+          description: The Studio's Scene object — layers with normalised rects. Stored as-is.
+    StudioSceneDocument:
+      type: object
+      required: [workspaceId, scene, version, savedAt, lastEventId]
+      properties:
+        workspaceId: { type: string }
+        scene:
+          type: object
+          additionalProperties: true
+        version:
+          type: number
+          description: Increments on every save; AS OF on the store can recover any earlier one.
+        savedAt: { type: string, format: date-time }
+        lastEventId:
+          type: string
+          description: The scene_saved event that recorded this version.
+    StudioSceneSaved:
+      type: object
+      required: [document, event, receipt]
+      properties:
+        document:
+          $ref: "#/components/schemas/StudioSceneDocument"
+        event:
+          $ref: "#/components/schemas/StudioEvent"
+        receipt:
+          $ref: "#/components/schemas/StoreReceipt"

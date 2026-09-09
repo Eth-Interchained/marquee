@@ -396,11 +396,123 @@ export interface PublishResult {
   message?: string;
 }
 
+/**
+ * What happened on air. A closed list; unknown kinds are rejected.
+ */
+export type StudioEventKind = typeof StudioEventKind[keyof typeof StudioEventKind];
+
+
+export const StudioEventKind = {
+  go_live: 'go_live',
+  stream_ended: 'stream_ended',
+  scene_saved: 'scene_saved',
+  source_added: 'source_added',
+  source_removed: 'source_removed',
+  stream_error: 'stream_error',
+} as const;
+
+/**
+ * Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added. Never a credential.
+ */
+export type StudioEventInputPayload = { [key: string]: unknown };
+
+export interface StudioEventInput {
+  /** @minLength 1 */
+  workspaceId: string;
+  kind: StudioEventKind;
+  /** When it happened on the operator's clock. Defaults to now. */
+  at?: string;
+  /** Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added. Never a credential. */
+  payload?: StudioEventInputPayload;
+  /**
+     * Ids of earlier events this one follows from.
+     * @maxItems 16
+     */
+  causedBy?: string[];
+}
+
+export type StudioEventPayload = { [key: string]: unknown };
+
+export interface StudioEvent {
+  id: string;
+  workspaceId: string;
+  kind: StudioEventKind;
+  at: string;
+  payload: StudioEventPayload;
+  causedBy: string[];
+  /** The store's sequence number when this event was written. */
+  seq: number;
+}
+
+/**
+ * The store's Merkle head and sequence right after a write, and whether the whole chain still verifies. This is what makes an event a receipt rather than a log line.
+ */
+export interface StoreReceipt {
+  head: string;
+  seq: number;
+  verified: boolean;
+}
+
+export interface StudioEventReceipt {
+  event: StudioEvent;
+  receipt: StoreReceipt;
+}
+
+export interface StudioEventList {
+  events: StudioEvent[];
+  receipt: StoreReceipt;
+}
+
+export interface StudioEventTrace {
+  event: StudioEvent;
+  /** Transitive causes, nearest first. */
+  causes: StudioEvent[];
+  /** Direct effects — events that name this one as a cause. */
+  effects: StudioEvent[];
+}
+
+/**
+ * The Studio's Scene object — layers with normalised rects. Stored as-is.
+ */
+export type StudioSceneInputScene = { [key: string]: unknown };
+
+export interface StudioSceneInput {
+  /** The Studio's Scene object — layers with normalised rects. Stored as-is. */
+  scene: StudioSceneInputScene;
+}
+
+export type StudioSceneDocumentScene = { [key: string]: unknown };
+
+export interface StudioSceneDocument {
+  workspaceId: string;
+  scene: StudioSceneDocumentScene;
+  /** Increments on every save; AS OF on the store can recover any earlier one. */
+  version: number;
+  savedAt: string;
+  /** The scene_saved event that recorded this version. */
+  lastEventId: string;
+}
+
+export interface StudioSceneSaved {
+  document: StudioSceneDocument;
+  event: StudioEvent;
+  receipt: StoreReceipt;
+}
+
 export type GetSessionStatusParams = {
 workspaceId: string;
 /**
  * Which network's session to read inside this workspace. Defaults to the workspace's own platform. A workspace may hold accounts on more than one network, and each is a separate session.
  */
 platform?: string;
+};
+
+export type ListStudioEventsParams = {
+workspaceId: string;
+/**
+ * @minimum 1
+ * @maximum 500
+ */
+limit?: number;
 };
 

@@ -285,3 +285,160 @@ export const CreateAiBriefResponse = zod.object({
 })
 
 
+/**
+ * Every go-live, stream end, scene save and source change is an append-only document in the local NEDB store, chained to what caused it. This is the receipt trail: what appeared on air, and why.
+ * @summary The Studio's event log for a workspace, newest first
+ */
+export const listStudioEventsQueryLimitDefault = 50;
+export const listStudioEventsQueryLimitMax = 500;
+
+
+
+export const ListStudioEventsQueryParams = zod.object({
+  "workspaceId": zod.coerce.string(),
+  "limit": zod.coerce.number().min(1).max(listStudioEventsQueryLimitMax).default(listStudioEventsQueryLimitDefault)
+})
+
+export const ListStudioEventsResponse = zod.object({
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "workspaceId": zod.string(),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date(),
+  "payload": zod.record(zod.string(), zod.unknown()),
+  "causedBy": zod.array(zod.string()),
+  "seq": zod.number().describe('The store\'s sequence number when this event was written.')
+})),
+  "receipt": zod.object({
+  "head": zod.string(),
+  "seq": zod.number(),
+  "verified": zod.boolean()
+}).describe('The store\'s Merkle head and sequence right after a write, and whether the whole chain still verifies. This is what makes an event a receipt rather than a log line.')
+})
+
+
+/**
+ * Appends one event. `causedBy` names earlier event ids; each becomes a `caused_by` edge in the store's graph so TRACE can walk from an alert or a stream back to what produced it. The previous event on the same workspace is linked automatically, so the chain is never broken by a caller that forgot.
+ * @summary Record a Studio event with its causes
+ */
+
+export const recordStudioEventBodyCausedByMax = 16;
+
+
+
+export const RecordStudioEventBody = zod.object({
+  "workspaceId": zod.string().min(1),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date().optional().describe('When it happened on the operator\'s clock. Defaults to now.'),
+  "payload": zod.record(zod.string(), zod.unknown()).optional().describe('Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added. Never a credential.'),
+  "causedBy": zod.array(zod.string()).max(recordStudioEventBodyCausedByMax).optional().describe('Ids of earlier events this one follows from.')
+})
+
+export const RecordStudioEventResponse = zod.object({
+  "event": zod.object({
+  "id": zod.string(),
+  "workspaceId": zod.string(),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date(),
+  "payload": zod.record(zod.string(), zod.unknown()),
+  "causedBy": zod.array(zod.string()),
+  "seq": zod.number().describe('The store\'s sequence number when this event was written.')
+}),
+  "receipt": zod.object({
+  "head": zod.string(),
+  "seq": zod.number(),
+  "verified": zod.boolean()
+}).describe('The store\'s Merkle head and sequence right after a write, and whether the whole chain still verifies. This is what makes an event a receipt rather than a log line.')
+})
+
+
+/**
+ * @summary Causes and effects of one event
+ */
+export const TraceStudioEventParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const TraceStudioEventResponse = zod.object({
+  "event": zod.object({
+  "id": zod.string(),
+  "workspaceId": zod.string(),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date(),
+  "payload": zod.record(zod.string(), zod.unknown()),
+  "causedBy": zod.array(zod.string()),
+  "seq": zod.number().describe('The store\'s sequence number when this event was written.')
+}),
+  "causes": zod.array(zod.object({
+  "id": zod.string(),
+  "workspaceId": zod.string(),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date(),
+  "payload": zod.record(zod.string(), zod.unknown()),
+  "causedBy": zod.array(zod.string()),
+  "seq": zod.number().describe('The store\'s sequence number when this event was written.')
+})).describe('Transitive causes, nearest first.'),
+  "effects": zod.array(zod.object({
+  "id": zod.string(),
+  "workspaceId": zod.string(),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date(),
+  "payload": zod.record(zod.string(), zod.unknown()),
+  "causedBy": zod.array(zod.string()),
+  "seq": zod.number().describe('The store\'s sequence number when this event was written.')
+})).describe('Direct effects — events that name this one as a cause.')
+})
+
+
+/**
+ * @summary The saved scene for a workspace
+ */
+export const GetStudioSceneParams = zod.object({
+  "workspaceId": zod.coerce.string()
+})
+
+export const GetStudioSceneResponse = zod.object({
+  "workspaceId": zod.string(),
+  "scene": zod.record(zod.string(), zod.unknown()),
+  "version": zod.number().describe('Increments on every save; AS OF on the store can recover any earlier one.'),
+  "savedAt": zod.coerce.date(),
+  "lastEventId": zod.string().describe('The scene_saved event that recorded this version.')
+})
+
+
+/**
+ * @summary Save the scene and record a scene_saved event
+ */
+export const SaveStudioSceneParams = zod.object({
+  "workspaceId": zod.coerce.string()
+})
+
+export const SaveStudioSceneBody = zod.object({
+  "scene": zod.record(zod.string(), zod.unknown()).describe('The Studio\'s Scene object — layers with normalised rects. Stored as-is.')
+})
+
+export const SaveStudioSceneResponse = zod.object({
+  "document": zod.object({
+  "workspaceId": zod.string(),
+  "scene": zod.record(zod.string(), zod.unknown()),
+  "version": zod.number().describe('Increments on every save; AS OF on the store can recover any earlier one.'),
+  "savedAt": zod.coerce.date(),
+  "lastEventId": zod.string().describe('The scene_saved event that recorded this version.')
+}),
+  "event": zod.object({
+  "id": zod.string(),
+  "workspaceId": zod.string(),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "at": zod.coerce.date(),
+  "payload": zod.record(zod.string(), zod.unknown()),
+  "causedBy": zod.array(zod.string()),
+  "seq": zod.number().describe('The store\'s sequence number when this event was written.')
+}),
+  "receipt": zod.object({
+  "head": zod.string(),
+  "seq": zod.number(),
+  "verified": zod.boolean()
+}).describe('The store\'s Merkle head and sequence right after a write, and whether the whole chain still verifies. This is what makes an event a receipt rather than a log line.')
+})
+
+

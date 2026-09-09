@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppWindow, Camera, Clapperboard, Mic, Monitor, MonitorUp, Radio, Square, Volume2, X } from 'lucide-react';
+import { AppWindow, Camera, Clapperboard, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
+import {
+  getGetStudioSceneQueryKey,
+  getListStudioEventsQueryKey,
+  useGetStudioScene,
+  useListStudioEvents,
+  useRecordStudioEvent,
+  useSaveStudioScene,
+  type StudioEvent,
+  type StudioEventKind,
+} from '@workspace/api-client-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -89,6 +99,62 @@ export function StudioSection({ workspace }: SectionProps) {
     if (level === 'error') console.error(`[studio] ${text}${raw ? ` — ${raw}` : ''}`);
   }, []);
 
+  // ---- receipts: every on-air event is an append-only document in the store ----
+  const recordEvent = useRecordStudioEvent();
+  const saveScene = useSaveStudioScene();
+  const eventsQuery = useListStudioEvents({ workspaceId: workspace.id, limit: 8 }, { query: { retry: false, queryKey: getListStudioEventsQueryKey({ workspaceId: workspace.id, limit: 8 }) } });
+  const savedScene = useGetStudioScene(workspace.id, { query: { retry: false, queryKey: getGetStudioSceneQueryKey(workspace.id) } });
+  const liveEventIdRef = useRef<string | null>(null);
+
+  /**
+   * Record an event, never silently. A receipt that fails to write is shown
+   * as a notice with the server's reason; the on-air action itself is not
+   * blocked by it — the stream is the operator's, the ledger is ours to keep.
+   */
+  const record = useCallback(
+    async (kind: StudioEventKind, payload: Record<string, unknown>, causedBy: string[] = []): Promise<string | null> => {
+      try {
+        const result = await recordEvent.mutateAsync({ data: { workspaceId: workspace.id, kind, payload, causedBy } });
+        void eventsQuery.refetch();
+        return result.event.id;
+      } catch (error) {
+        notify('warn', `Receipt for ${kind} was NOT recorded: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      }
+    },
+    [eventsQuery, notify, recordEvent, workspace.id],
+  );
+
+  // Restore the last saved scene once, before the operator has touched anything.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !savedScene.data) return;
+    restoredRef.current = true;
+    const doc = savedScene.data.scene as unknown as Scene;
+    if (doc && Array.isArray(doc.layers) && typeof doc.width === 'number') {
+      setScene(doc);
+      notify('info', `Restored scene v${savedScene.data.version} from the store.`);
+    }
+  }, [notify, savedScene.data]);
+
+  // Autosave the scene, debounced; each save is a versioned document plus a
+  // scene_saved event chained to the previous save.
+  const sceneDirtyRef = useRef(false);
+  useEffect(() => {
+    if (!sceneDirtyRef.current) {
+      sceneDirtyRef.current = true; // skip the initial render
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      saveScene
+        .mutateAsync({ workspaceId: workspace.id, data: { scene: scene as unknown as Record<string, unknown> } })
+        .then(() => void eventsQuery.refetch())
+        .catch((error: unknown) => notify('warn', `Scene was NOT saved: ${error instanceof Error ? error.message : String(error)}`));
+    }, 1500);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, workspace.id]);
+
   // Go Live — one WHIP upstream to mediamtx. Settings persist per browser so
   // the operator does not retype the ingest host every session. The password
   // is kept in sessionStorage only: it leaves with the tab.
@@ -137,17 +203,33 @@ export function StudioSection({ workspace }: SectionProps) {
     try {
       await publisher.start(stream);
       notify('info', `Live. Viewers: ${viewer?.hls}`);
+      liveEventIdRef.current = await record('go_live', {
+        host: live.base,
+        path: live.path,
+        endpoint: whipEndpoint,
+        viewer: viewer?.hls ?? null,
+        sources: Object.keys(streamsRef.current),
+        audio: Boolean(mixed),
+      });
     } catch (error) {
       publisherRef.current = null;
       notify('error', error instanceof Error ? error.message : String(error));
     }
-  }, [live, notify, viewer, whipEndpoint]);
+  }, [live, notify, record, viewer, whipEndpoint]);
 
   const endLive = useCallback(async () => {
     const p = publisherRef.current;
     publisherRef.current = null;
+    const since = p?.getState();
     await p?.stop();
-  }, []);
+    const cause = liveEventIdRef.current;
+    liveEventIdRef.current = null;
+    await record(
+      'stream_ended',
+      { reason: 'operator', durationMs: since?.kind === 'live' ? Date.now() - since.since : null },
+      cause ? [cause] : [],
+    );
+  }, [record]);
 
   useEffect(() => {
     return () => {
@@ -157,6 +239,15 @@ export function StudioSection({ workspace }: SectionProps) {
 
   const shell = getShell();
   const shellPicker = Boolean(shell?.studio);
+
+  // A stream that drops while live is an event too — chained to its go_live.
+  useEffect(() => {
+    if (whip.kind === 'error' && liveEventIdRef.current) {
+      const cause = liveEventIdRef.current;
+      liveEventIdRef.current = null;
+      void record('stream_error', { message: whip.message }, [cause]);
+    }
+  }, [record, whip]);
 
   // Compositor lifetime = section lifetime.
   useEffect(() => {
@@ -207,6 +298,7 @@ export function StudioSection({ workspace }: SectionProps) {
       streamsRef.current[layerId] = stream;
       compositorRef.current?.setSource(layerId, videoFor(stream));
       setSources((s) => ({ ...s, [layerId]: label }));
+      void record('source_added', { source: layerId, label, audio: stream.getAudioTracks().length > 0 });
       stream.getVideoTracks()[0]?.addEventListener('ended', () => {
         compositorRef.current?.setSource(layerId, null);
         delete streamsRef.current[layerId];
@@ -217,9 +309,10 @@ export function StudioSection({ workspace }: SectionProps) {
           return n;
         });
         notify('info', `${label} stopped — the source ended.`);
+        void record('source_removed', { source: layerId, label, reason: 'ended' });
       });
     },
-    [notify],
+    [notify, record],
   );
 
   /** Actually capture, after the shell (if any) has been armed. */
@@ -304,18 +397,22 @@ export function StudioSection({ workspace }: SectionProps) {
     }
   }, [ensureMixer, notify]);
 
-  const removeSource = useCallback((id: string) => {
-    const s = streamsRef.current[id];
-    if (s) stopStream(s);
-    delete streamsRef.current[id];
-    compositorRef.current?.setSource(id, null);
-    mixerRef.current?.remove(id);
-    setSources((prev) => {
-      const n = { ...prev };
-      delete n[id];
-      return n;
-    });
-  }, []);
+  const removeSource = useCallback(
+    (id: string) => {
+      const s = streamsRef.current[id];
+      if (s) stopStream(s);
+      delete streamsRef.current[id];
+      compositorRef.current?.setSource(id, null);
+      mixerRef.current?.remove(id);
+      setSources((prev) => {
+        const n = { ...prev };
+        delete n[id];
+        return n;
+      });
+      void record('source_removed', { source: id, reason: 'operator' });
+    },
+    [record],
+  );
 
   // ---- pointer interaction ----
   const normPoint = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -653,6 +750,8 @@ export function StudioSection({ workspace }: SectionProps) {
             </CardContent>
           </Card>
 
+          <ReceiptsCard events={eventsQuery.data?.events ?? []} receipt={eventsQuery.data?.receipt ?? null} error={eventsQuery.error ? String(eventsQuery.error.message) : null} />
+
           {notices.length > 0 ? (
             <Card>
               <CardHeader className="pb-2">
@@ -734,5 +833,76 @@ export function StudioSection({ workspace }: SectionProps) {
         </DialogContent>
       </Dialog>
     </SectionShell>
+  );
+}
+
+const KIND_LABEL: Record<StudioEventKind, string> = {
+  go_live: 'went live',
+  stream_ended: 'stream ended',
+  stream_error: 'stream error',
+  scene_saved: 'scene saved',
+  source_added: 'source added',
+  source_removed: 'source removed',
+};
+
+/**
+ * The receipts. Every row is an append-only document in the local NEDB store,
+ * chained to what caused it; the head is the store's Merkle root after the
+ * last write and `verified` is the whole chain checking out. This is the
+ * part a hosted overlay service cannot offer: proof, not a log.
+ */
+function ReceiptsCard({
+  events,
+  receipt,
+  error,
+}: {
+  events: StudioEvent[];
+  receipt: { head: string; seq: number; verified: boolean } | null;
+  error: string | null;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Receipt className="h-3.5 w-3.5" /> Receipts
+          {receipt ? (
+            <Badge variant="outline" className="ml-auto gap-1 font-mono text-[10px]" title={receipt.head} data-testid="badge-receipt-head">
+              {receipt.verified ? <ShieldCheck className="h-3 w-3 text-chart-2" /> : <ShieldAlert className="h-3 w-3 text-destructive" />}
+              seq {receipt.seq} · {receipt.head.slice(0, 10)}
+            </Badge>
+          ) : null}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-1.5">
+        {error ? (
+          <p className="font-mono text-[11px] text-destructive">Receipts unavailable: {error}</p>
+        ) : events.length === 0 ? (
+          <p className="text-xs text-muted-foreground">Nothing recorded yet. Adding a source, saving the scene, or going live writes a receipt.</p>
+        ) : (
+          events.map((e) => (
+            <div key={e.id} className="flex items-center gap-2 rounded-md border border-card-border bg-background/40 px-2.5 py-1.5 text-xs" data-testid={`receipt-${e.id}`}>
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 shrink-0 rounded-full',
+                  e.kind === 'go_live' && 'bg-destructive',
+                  e.kind === 'stream_ended' && 'bg-muted-foreground',
+                  e.kind === 'stream_error' && 'bg-chart-3',
+                  e.kind === 'scene_saved' && 'bg-chart-1',
+                  (e.kind === 'source_added' || e.kind === 'source_removed') && 'bg-chart-2',
+                )}
+              />
+              <span>{KIND_LABEL[e.kind] ?? e.kind}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground">
+                {typeof e.payload.label === 'string' ? e.payload.label : typeof e.payload.path === 'string' ? e.payload.path : typeof e.payload.version === 'number' ? `v${e.payload.version}` : ''}
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground" title={`${e.causedBy.length} cause(s) · ${e.at}`}>
+                #{e.seq}
+                {e.causedBy.length > 0 ? ` ← ${e.causedBy.length}` : ''}
+              </span>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
   );
 }
