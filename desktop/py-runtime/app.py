@@ -80,8 +80,14 @@ class _RedactToken(logging.Filter):
 
 
 # uvicorn's *error* logger (not only access) announces WebSocket handshakes at
-# INFO with the full target — that is the second place the token appeared.
-# Warnings and errors stay; the INFO chatter ("connection open") goes.
+# INFO with the full target — the second place the token appeared.
+#
+# Raising its level here is only a hint, NOT the defence: `uvicorn.run()`
+# applies its own dictConfig, which resets the level of every uvicorn logger.
+# Observed directly — with this setLevel in place, the handshake line still
+# printed at INFO, and what kept the token out of it was the filter below.
+# Filters attached to a logger object survive dictConfig; levels do not. So
+# the filter is load-bearing and must never be removed as "redundant".
 _uv_error = logging.getLogger("uvicorn.error")
 _uv_error.setLevel(logging.WARNING)
 for _lg in (logging.getLogger(), _uv_error, logging.getLogger("uvicorn")):
@@ -90,7 +96,41 @@ for _lg in (logging.getLogger(), _uv_error, logging.getLogger("uvicorn")):
         _h.addFilter(_RedactToken())
 
 TOKEN = os.environ.get("MARQUEE_PY_RUNTIME_TOKEN", "")
-PORT = int(os.environ.get("JENNY_PORT") or os.environ.get("MARQUEE_PY_RUNTIME_PORT") or "18764")
+
+
+def _port_from_argv(argv: list[str]) -> int | None:
+    """`--port N` / `--port=N`, which is what the vendored orchestrator passes
+    to the PACKAGED executable (dev mode drives uvicorn directly instead).
+
+    Honouring argv is not optional politeness: Jenny sets JENNY_PORT *and*
+    passes --port, and a bundle that reads only the env would keep working by
+    luck until someone changed one of them. Pure and tested.
+    """
+    for index, arg in enumerate(argv):
+        if arg == "--port" and index + 1 < len(argv):
+            candidate = argv[index + 1]
+        elif arg.startswith("--port="):
+            candidate = arg.split("=", 1)[1]
+        else:
+            continue
+        try:
+            value = int(candidate)
+        except ValueError:
+            continue
+        if 1 <= value <= 65535:
+            return value
+    return None
+
+
+def _resolve_port(argv: list[str], env: dict[str, str]) -> int:
+    """argv wins over env — it is the more explicit signal from the supervisor."""
+    from_argv = _port_from_argv(argv)
+    if from_argv is not None:
+        return from_argv
+    return int(env.get("JENNY_PORT") or env.get("MARQUEE_PY_RUNTIME_PORT") or "18764")
+
+
+PORT = _resolve_port(sys.argv[1:], dict(os.environ))
 WORKSPACE = os.environ.get("JENNY_WORKSPACE_DIR") or os.getcwd()
 
 # Programs the PTY may launch. A closed list, not a free string: the terminal
@@ -222,13 +262,19 @@ async def ws_pty(ws: WebSocket) -> None:
     if not argv:
         await ws.close(code=4404, reason=f"unknown program '{program}'; allowed: {sorted(PROGRAMS)}")
         return
+    cols = int(ws.query_params.get("cols", "120"))
+    rows = int(ws.query_params.get("rows", "32"))
+
     if sys.platform == "win32":
-        await ws.close(code=4501, reason="PTY on Windows needs pywinpty; not wired yet")
+        # ConPTY via pywinpty, in its own module so the verified POSIX path
+        # below is untouched. UNVERIFIED on Windows — see winpty_session.py.
+        from winpty_session import serve as serve_conpty
+
+        await ws.accept()
+        await serve_conpty(ws, argv, cols, rows, WORKSPACE)
         return
 
     await ws.accept()
-    cols = int(ws.query_params.get("cols", "120"))
-    rows = int(ws.query_params.get("rows", "32"))
 
     pid, fd = pty.fork()
     if pid == 0:

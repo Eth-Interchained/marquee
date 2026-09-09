@@ -22,10 +22,42 @@ on the machine.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 MARQUEE_PY_RUNTIME_TOKEN=dev JENNY_PORT=18764 python app.py
+# or the shape the packaged exe is started with:
+MARQUEE_PY_RUNTIME_TOKEN=dev python app.py --port 18764
 ```
 
-Prod is the Jenny recipe: PyInstaller `--onedir --name jenny` → `resources/python/jenny/jenny[.exe]`,
-`asarUnpack: resources/python/**`. The flag list lives in `_Gex/cli/commands/build.js`; copy it exactly.
+Tests (stdlib only — this gets bundled, so it carries no test dependency):
+
+```bash
+.venv/bin/python -m unittest discover -s . -p 'test_*.py'
+```
+
+## Bundling
+
+```bash
+.venv/bin/python build.py --check
+```
+
+Jenny's recipe, kept intact: `--onedir --name jenny`, plus the uvicorn
+`--hidden-import`s PyInstaller cannot discover on its own (uvicorn resolves its
+protocol implementations by string at runtime). The name and the layout are not
+cosmetic — `resources/python/jenny/jenny[.exe]` is the *first* path the
+vendored `findPythonExe` checks, and `desktop/shell/test/packaging.test.ts`
+asserts the electron-builder `extraResources` mapping still lands there.
+
+`--check` runs the bundle the way the shell will and reads `/health` back,
+then confirms an untokened `/run_code` is still 401 — a bundle that builds but
+cannot serve, or that loses its gate, is the failure the hidden-import list
+exists to prevent and it only appears at runtime.
 
 ## Windows
-`/ws/pty` refuses with close code 4501 until `pywinpty` is wired. `/run_code` and `/health` work everywhere.
+
+`/ws/pty` uses ConPTY through `pywinpty` (`winpty_session.py`;
+platform-conditional in `requirements.txt`). **That path has never been run on
+Windows** — it is written from pywinpty's documented API. It is wired instead
+of refused because it names what breaks rather than guessing: no pywinpty
+closes with 4501 and says to install it, a failed spawn closes with 4502 and
+the exception text, and anything later arrives as an `{"type":"error"}` frame.
+Treat a green result as "someone ran it on Windows", never as tested.
+
+`/run_code` and `/health` work everywhere.

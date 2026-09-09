@@ -63,3 +63,8 @@ desktop/py-runtime/.venv/
 desktop/py-runtime/__pycache__/
 desktop/py-runtime/build/
 desktop/py-runtime/dist/
+
+# PyInstaller output — built by desktop/py-runtime/build.py, never committed
+desktop/py-runtime/dist/
+desktop/py-runtime/build/
+desktop/py-runtime/jenny.spec

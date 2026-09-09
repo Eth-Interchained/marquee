@@ -8,12 +8,58 @@
     "build": "node ./build.mjs",
     "start": "pnpm run build && electron .",
     "test": "node --import tsx --test test/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "bundle:python": "python3 ../py-runtime/build.py --check",
+    "package": "pnpm run bundle:python && pnpm run build && electron-builder"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "electron": "44.1.1",
     "esbuild": "0.27.3",
-    "tsx": "catalog:"
+    "tsx": "catalog:",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "com.interchained.marquee",
+    "productName": "marquee",
+    "asar": true,
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../py-runtime/dist/jenny",
+        "to": "python/jenny",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../artifacts/studio/dist/public",
+        "to": "workspace-ui",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../artifacts/api-server/dist",
+        "to": "api-server",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.video"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "AudioVideo"
+    }
   }
 }

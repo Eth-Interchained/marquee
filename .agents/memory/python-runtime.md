@@ -55,7 +55,15 @@ proved that.
 
 **How to apply:** log the events that matter (`pty spawned`, `run_code`)
 explicitly, without the token; grep the shell log for `token=` after any
-change to the runtime's logging — the count must not grow.
+change to the runtime's logging — and read the matching LINES, not just the
+count: a redacted line still contains the literal string `token=`.
+
+**The filter is the defence, not the level.** `uvicorn.run()` applies its own
+`dictConfig`, which RESETS the level of every uvicorn logger — observed
+directly: with `uvicorn.error` set to WARNING at import, the handshake line
+still printed at INFO, and the only reason the token was not in it was the
+`token=` redaction filter. Filters attached to a logger object survive
+dictConfig; levels do not. Never delete that filter as "redundant".
 
 ## The terminal is a PTY served by Python, not node-pty
 
