@@ -390,10 +390,15 @@ class ZoomResult:
     took_seconds: float
     notes: list[str] = field(default_factory=list)
 
+    outputs: list[dict[str, Any]] = field(default_factory=list)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "source": self.source,
+            # `output` stays the primary file so existing callers keep working;
+            # `outputs` carries every shape that was rendered.
             "output": self.output,
+            "outputs": self.outputs,
             "cursorTrack": self.cursor_track,
             "outputBytes": self.output_bytes,
             "width": self.width,
@@ -406,10 +411,49 @@ class ZoomResult:
         }
 
 
+@dataclass(frozen=True)
+class ZoomTarget:
+    """One delivery format: a name and the frame it fills.
+
+    Named rather than inferred, because "9:16" is what a creator asks for and
+    "1080x1920" is what the encoder needs. The name also becomes part of the
+    filename, so a folder of exports is readable without opening anything.
+    """
+
+    label: str
+    width: int
+    height: int
+
+    @property
+    def aspect(self) -> float:
+        return self.width / self.height
+
+
+# The three shapes a creator actually posts. Widescreen keeps the plain name
+# because it is the default; the others are suffixed so a folder of exports
+# reads at a glance.
+TARGET_WIDE = ZoomTarget("16x9", 1920, 1080)
+TARGET_SQUARE = ZoomTarget("1x1", 1080, 1080)
+TARGET_VERTICAL = ZoomTarget("9x16", 1080, 1920)
+DEFAULT_TARGETS = (TARGET_WIDE,)
+KNOWN_TARGETS = {t.label: t for t in (TARGET_WIDE, TARGET_SQUARE, TARGET_VERTICAL)}
+
+
+def target_output_path(source: str, target: ZoomTarget, primary_label: str = "16x9") -> str:
+    """Where one target's file goes. Pure; tested.
+
+    The primary shape gets `<name>.zoomed.mp4`; every other shape carries its
+    label. Never the source itself, whatever the source's extension.
+    """
+    stem = str(Path(source).with_suffix(""))
+    if target.label == primary_label:
+        return f"{stem}.zoomed.mp4"
+    return f"{stem}.zoomed-{target.label}.mp4"
+
+
 def default_output_path(source: str) -> str:
     """`<name>.zoomed.mp4` beside the source. Never the source itself."""
-    p = Path(source)
-    return str(p.with_suffix("")) + ".zoomed.mp4"
+    return target_output_path(source, TARGET_WIDE)
 
 
 def render_zoom(
@@ -417,13 +461,22 @@ def render_zoom(
     cursor_track: str,
     output: Optional[str] = None,
     *,
-    out_width: int = 1920,
-    out_height: int = 1080,
+    targets: Sequence[ZoomTarget] = DEFAULT_TARGETS,
     zoom_scale: float = 0.5,
     audio_bitrate: int = 160_000,
     video_bitrate: int = 8_000_000,
 ) -> ZoomResult:
-    """Render `source` to a zoomed MP4 using `cursor_track` to decide framing.
+    """Render `source` into one zoomed edit per target shape.
+
+    THE SOURCE IS DECODED ONCE. Rendering three aspect ratios as three separate
+    passes would decode a 4K take three times, and decoding is the expensive
+    half — so every target gets its own encoder and filter graph, all fed from
+    a single decode. The crop CENTRE comes from one shared plan; only the crop
+    RECT differs per shape.
+
+    Which is the whole reason vertical is worth offering at all: a 9:16 crop of
+    a 16:9 screen throws away 68% of the width, so a blind centre-crop is
+    useless. Knowing where the cursor was is what makes it watchable.
 
     Raises ZoomUnavailable without PyAV, FileNotFoundError for a missing input,
     and ValueError for an input this cannot work with.
@@ -431,6 +484,7 @@ def render_zoom(
     try:
         import av
         import av.audio.resampler
+        import av.filter
     except ImportError as exc:
         raise ZoomUnavailable(
             "PyAV is not installed in this runtime, so a zoomed edit cannot be rendered. "
@@ -443,18 +497,36 @@ def render_zoom(
     if src.stat().st_size == 0:
         raise ValueError(f"the recording at {source} is empty — nothing was captured")
 
+    if not targets:
+        raise ValueError("no output shapes were requested; there is nothing to render")
+    for target in targets:
+        if target.width % 2 or target.height % 2:
+            raise ValueError(
+                f"the {target.label} output size must be even on both axes; got {target.width}x{target.height}"
+            )
+
     track = load_cursor_track(cursor_track)
 
-    out_path = output or default_output_path(source)
-    if Path(out_path).resolve() == src.resolve():
-        raise ValueError("the output path is the source path; refusing to overwrite the recording")
-
-    if out_width % 2 or out_height % 2:
-        raise ValueError(f"the output size must be even on both axes; got {out_width}x{out_height}")
+    primary = targets[0]
+    # An explicit `output` names the PRIMARY file; the rest are derived, because
+    # one caller-supplied path cannot describe three files.
+    paths: dict[str, str] = {}
+    for target in targets:
+        paths[target.label] = (
+            output
+            if (output and target.label == primary.label)
+            else target_output_path(source, target, primary_label=primary.label)
+        )
+        if Path(paths[target.label]).resolve() == src.resolve():
+            raise ValueError(
+                f"the {target.label} output path is the source path; refusing to overwrite the recording"
+            )
+    if len(set(paths.values())) != len(paths):
+        raise ValueError(f"two targets resolved to the same output path: {sorted(paths.values())}")
 
     started = time.monotonic()
     frames = 0
-    target_aspect = out_width / out_height
+    notes: list[str] = []
 
     with av.open(str(src)) as inp:
         if not inp.streams.video:
@@ -464,154 +536,194 @@ def render_zoom(
         src_w = vin.codec_context.width
         src_h = vin.codec_context.height
         duration_ms = int((inp.duration or 0) / 1000) if inp.duration else 0
-
         if not duration_ms and track.samples:
-            # A Matroska from MediaRecorder often reports no container duration;
-            # the track's own last timestamp is a better answer than zero.
+            # Matroska from MediaRecorder often reports no container duration;
+            # the track's own last timestamp beats zero.
             duration_ms = track.samples[-1].t_ms
 
         plan = plan_zooms(track.samples, duration_ms, zoom_scale=zoom_scale)
-        notes = list(plan.notes)
-        if out_width > src_w or out_height > src_h:
-            notes.append(
-                f"The output ({out_width}x{out_height}) is larger than the source ({src_w}x{src_h}), "
-                "so zoomed regions are upscaled. Record at the display's native resolution to avoid this."
-            )
+        notes.extend(plan.notes)
 
-        with av.open(out_path, mode="w", format="mp4") as out:
-            vout = out.add_stream("h264", rate=30)
-            vout.width = out_width
-            vout.height = out_height
-            vout.pix_fmt = "yuv420p"
-            vout.codec_context.bit_rate = video_bitrate
+        # One sink per target: its own container, streams, resampler and filter
+        # graph cache. A graph's parameters are fixed at configure time and PyAV
+        # exposes no send_command, so a changing crop needs a new graph —
+        # measured at 6.41ms fresh against 1.95ms reused, hence the cache. A
+        # HOLD does not change the rect at all, and holds are most of any take.
+        sinks: list[dict[str, Any]] = []
+        try:
+            for target in targets:
+                container = av.open(paths[target.label], mode="w", format="mp4")
+                vout = container.add_stream("h264", rate=30)
+                vout.width = target.width
+                vout.height = target.height
+                vout.pix_fmt = "yuv420p"
+                # Scale the bitrate with the pixel count, so a 1080x1080 square
+                # is not given the same budget as a 1920x1080 frame.
+                pixel_ratio = (target.width * target.height) / (TARGET_WIDE.width * TARGET_WIDE.height)
+                vout.codec_context.bit_rate = max(500_000, int(video_bitrate * pixel_ratio))
 
-            aout = None
-            resampler = None
-            if ain is not None:
-                aout = out.add_stream("aac", rate=ain.codec_context.rate or 48_000)
-                aout.codec_context.bit_rate = audio_bitrate
-                resampler = av.audio.resampler.AudioResampler(
-                    format=aout.codec_context.format,
-                    layout=aout.codec_context.layout,
-                    rate=aout.codec_context.rate,
+                aout = None
+                resampler = None
+                if ain is not None:
+                    aout = container.add_stream("aac", rate=ain.codec_context.rate or 48_000)
+                    aout.codec_context.bit_rate = audio_bitrate
+                    resampler = av.audio.resampler.AudioResampler(
+                        format=aout.codec_context.format,
+                        layout=aout.codec_context.layout,
+                        rate=aout.codec_context.rate,
+                    )
+
+                if target.width > src_w or target.height > src_h:
+                    notes.append(
+                        f"The {target.label} output ({target.width}x{target.height}) is larger than the source "
+                        f"({src_w}x{src_h}) on at least one axis, so zoomed regions are upscaled."
+                    )
+
+                sinks.append(
+                    {
+                        "target": target,
+                        "container": container,
+                        "vout": vout,
+                        "aout": aout,
+                        "resampler": resampler,
+                        "graph": None,
+                        "rect": None,
+                        "rebuilds": 0,
+                    }
                 )
-
-            # Cropping and scaling go through libavfilter — `crop` then
-            # `scale`. That keeps every pixel inside ffmpeg: no round trip
-            # through an array, and therefore no numpy dependency, which this
-            # runtime does not have and should not grow for one code path.
-            #
-            # A filter graph's parameters are fixed when it is configured and
-            # PyAV exposes no send_command, so a changing crop needs a new
-            # graph. Measured here: a fresh graph costs 6.4ms/frame against
-            # 1.95ms for a reused one, so the last graph is cached. During a
-            # HOLD the rect does not change at all, and holds are most of any
-            # take — the cache is doing real work, not defending against a
-            # hypothetical.
-            streams = [vin] + ([ain] if ain is not None else [])
-            cached_rect: Optional[tuple[int, int, int, int]] = None
-            graph = None
-            rebuilds = 0
 
             # Decode through the CONTAINER, not packet.decode().
             #
             # Measured, not stylistic: on PyAV 15 `packet.decode()` yielded ZERO
-            # video frames from a MediaRecorder Matroska, while
-            # `container.decode()` decoded it fine. The cause was that the
-            # leading packets carry dts=None — they hold the codec's SPS/PPS —
-            # and a loop that skips dts=None packets before decoding starves
-            # the decoder of the headers it needs to start. That failure is
-            # silent: you get an output file with no video stream and no error
-            # anywhere, which is exactly why this function reads its own result
-            # back before reporting success.
-            #
-            # Both streams come through one interleaved decode, so the file is
-            # read once and the muxer gets packets in roughly the right order.
+            # video frames from a MediaRecorder Matroska, because the leading
+            # packets carry the codec's SPS/PPS and a loop that skips dts=None
+            # packets before decoding starves the decoder of them. That failure
+            # is SILENT — an output file with no video stream and no error
+            # anywhere — which is why this function reads its results back
+            # before reporting success.
+            streams = [vin] + ([ain] if ain is not None else [])
             for frame in inp.decode(*streams):
                 if isinstance(frame, av.VideoFrame):
                     if frame.pts is not None and frame.time_base:
                         t_ms = float(frame.pts * frame.time_base * 1000)
                     else:
-                        # No pts: fall back to the frame index at the output
-                        # rate rather than collapsing every keyframe onto t=0.
                         t_ms = frames * (1000 / 30)
 
                     cx, cy, scale = sample_plan(plan.keyframes, t_ms)
-                    rect = crop_rect(cx, cy, scale, src_w, src_h, target_aspect)
 
-                    if rect != cached_rect or graph is None:
-                        left, top, crop_w, crop_h = rect
-                        graph = av.filter.Graph()
-                        buffer = graph.add_buffer(
-                            width=src_w, height=src_h, format=frame.format.name, time_base=frame.time_base
-                        )
-                        cropper = graph.add("crop", f"w={crop_w}:h={crop_h}:x={left}:y={top}")
-                        scaler = graph.add("scale", f"w={out_width}:h={out_height}")
-                        sink = graph.add("buffersink")
-                        buffer.link_to(cropper)
-                        cropper.link_to(scaler)
-                        scaler.link_to(sink)
-                        graph.configure()
-                        cached_rect = rect
-                        rebuilds += 1
+                    for sink in sinks:
+                        target = sink["target"]
+                        rect = crop_rect(cx, cy, scale, src_w, src_h, target.aspect)
+                        if rect != sink["rect"] or sink["graph"] is None:
+                            left, top, crop_w, crop_h = rect
+                            graph = av.filter.Graph()
+                            buffer = graph.add_buffer(
+                                width=src_w,
+                                height=src_h,
+                                format=frame.format.name,
+                                time_base=frame.time_base,
+                            )
+                            cropper = graph.add("crop", f"w={crop_w}:h={crop_h}:x={left}:y={top}")
+                            scaler = graph.add("scale", f"w={target.width}:h={target.height}")
+                            sink_node = graph.add("buffersink")
+                            buffer.link_to(cropper)
+                            cropper.link_to(scaler)
+                            scaler.link_to(sink_node)
+                            graph.configure()
+                            sink["graph"] = graph
+                            sink["rect"] = rect
+                            sink["rebuilds"] += 1
 
-                    graph.push(frame)
-                    filtered = graph.pull()
-                    # KEEP the pts and time_base the graph carried through from
-                    # the source. Measured both ways: clearing the pts so "the
-                    # encoder assigns its own" muxes ~20 frames and then dies
-                    # with "Invalid argument" at the flush, because the encoder
-                    # emits timestamps the MP4 muxer will not accept. Preserving
-                    # them encodes all 60 test frames cleanly.
-                    for encoded in vout.encode(filtered):
-                        out.mux(encoded)
+                        sink["graph"].push(frame)
+                        filtered = sink["graph"].pull()
+                        # KEEP the pts and time_base the graph carried through
+                        # from the source. Measured both ways: clearing the pts
+                        # so "the encoder assigns its own" muxes ~20 frames and
+                        # then dies with "Invalid argument" at the flush.
+                        for encoded in sink["vout"].encode(filtered):
+                            sink["container"].mux(encoded)
                     frames += 1
 
-                elif isinstance(frame, av.AudioFrame) and aout is not None and resampler is not None:
-                    # A zoom does not alter the soundtrack; the audio is simply
-                    # re-encoded straight through at its own rate.
-                    for rframe in resampler.resample(frame):
-                        rframe.pts = None
-                        for encoded in aout.encode(rframe):
-                            out.mux(encoded)
+                elif isinstance(frame, av.AudioFrame):
+                    # A zoom does not alter the soundtrack. Every output gets
+                    # the same audio, re-encoded once per container because a
+                    # stream cannot be shared between them.
+                    for sink in sinks:
+                        if sink["aout"] is None or sink["resampler"] is None:
+                            continue
+                        for rframe in sink["resampler"].resample(frame):
+                            rframe.pts = None
+                            for encoded in sink["aout"].encode(rframe):
+                                sink["container"].mux(encoded)
 
-            for encoded in vout.encode(None):
-                out.mux(encoded)
-            if aout is not None:
-                for encoded in aout.encode(None):
-                    out.mux(encoded)
+            for sink in sinks:
+                for encoded in sink["vout"].encode(None):
+                    sink["container"].mux(encoded)
+                if sink["aout"] is not None:
+                    for encoded in sink["aout"].encode(None):
+                        sink["container"].mux(encoded)
+        finally:
+            # Close every container even if one of them failed, or a half-written
+            # MP4 is left with no moov atom and looks like corruption.
+            for sink in sinks:
+                try:
+                    sink["container"].close()
+                except Exception as exc:  # pragma: no cover - reported, never swallowed
+                    log.error("could not close the %s output: %s", sink["target"].label, exc)
 
-            notes.append(
-                f"{frames} frame(s) filtered through {rebuilds} crop graph(s); "
-                f"{frames - rebuilds} reused a cached graph."
-            )
+        total_rebuilds = sum(int(s["rebuilds"]) for s in sinks)
+        notes.append(
+            f"{frames} frame(s) decoded once and filtered into {len(sinks)} shape(s) "
+            f"through {total_rebuilds} crop graph(s)."
+        )
 
     took = time.monotonic() - started
 
-    # Read the RESULT back rather than trusting what we just wrote.
-    duration = None
-    with av.open(out_path) as check:
-        if check.duration:
-            duration = check.duration / 1_000_000
-        if not check.streams.video:
-            raise ValueError("the rendered file has no video stream; the encode produced nothing usable")
+    # Read every RESULT back rather than trusting what was just written.
+    outputs: list[dict[str, Any]] = []
+    primary_duration: Optional[float] = None
+    for sink in sinks:
+        target = sink["target"]
+        path = paths[target.label]
+        with av.open(path) as check:
+            if not check.streams.video:
+                raise ValueError(
+                    f"the rendered {target.label} file has no video stream; the encode produced nothing usable"
+                )
+            duration = check.duration / 1_000_000 if check.duration else None
+            has_audio = bool(check.streams.audio)
+        if target.label == primary.label:
+            primary_duration = duration
+        outputs.append(
+            {
+                "label": target.label,
+                "path": path,
+                "width": target.width,
+                "height": target.height,
+                "bytes": Path(path).stat().st_size,
+                "durationSeconds": round(duration, 3) if duration else None,
+                "hasAudio": has_audio,
+                "cropGraphs": int(sink["rebuilds"]),
+            }
+        )
 
     result = ZoomResult(
         source=str(src),
-        output=out_path,
+        output=paths[primary.label],
         cursor_track=cursor_track,
-        output_bytes=Path(out_path).stat().st_size,
-        width=out_width,
-        height=out_height,
+        output_bytes=Path(paths[primary.label]).stat().st_size,
+        width=primary.width,
+        height=primary.height,
         frames=frames,
         keyframes=len(plan.keyframes),
-        duration_seconds=round(duration, 3) if duration else None,
+        duration_seconds=round(primary_duration, 3) if primary_duration else None,
         took_seconds=took,
         notes=notes,
+        outputs=outputs,
     )
     log.info(
-        "rendered a zoomed edit %s -> %s (%d frames, %d keyframes, %.1fs)",
-        src.name, Path(out_path).name, frames, len(plan.keyframes), took,
+        "rendered %d zoomed shape(s) from %s (%d frames, %d keyframes, %.1fs)",
+        len(outputs), src.name, frames, len(plan.keyframes), took,
     )
     return result
 

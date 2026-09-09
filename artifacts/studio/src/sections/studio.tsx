@@ -43,8 +43,10 @@ import {
   type FinaliseResult,
   type RecorderState,
   type RecordingFormat,
+  ZOOM_SHAPES,
   type ZoomPlanResult,
   type ZoomRenderResult,
+  type ZoomShapeLabel,
 } from '@/lib/studio/recorder.ts';
 import { viewerUrls, WhipPublisher, type WhipState } from '@/lib/studio/whip.ts';
 import { Input } from '@/components/ui/input';
@@ -353,6 +355,13 @@ export function StudioSection({ workspace }: SectionProps) {
   } | null>(null);
   const [zoomPlan, setZoomPlan] = useState<ZoomPlanResult | null>(null);
   const [zooming, setZooming] = useState(false);
+  /**
+   * Which delivery shapes to render, in order — the first is primary and gets
+   * the plain `.zoomed.mp4`. Wide only by default: the source decodes once for
+   * all of them, but each still costs its own encode, so extra shapes are the
+   * operator's choice rather than a surprise on the clock.
+   */
+  const [zoomShapes, setZoomShapes] = useState<ZoomShapeLabel[]>(['16x9']);
   const [finalising, setFinalising] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -489,21 +498,17 @@ export function StudioSection({ workspace }: SectionProps) {
    * watching a spinner.
    */
   const renderZoom = useCallback(
-    async (source: string, cursorTrack: string, cause: string | null) => {
+    async (source: string, cursorTrack: string, cause: string | null, shapes: readonly ZoomShapeLabel[]) => {
       setZooming(true);
       const startedAt = Date.now();
       try {
-        const result = await renderZoomedEdit(source, cursorTrack, {
-          // The DELIVERY size. Cropping 1920x1080 out of a native capture is a
-          // zoom at full sharpness; encoding the source size back out would
-          // cost far more for pixels no viewer asked for.
-          outWidth: 1920,
-          outHeight: 1080,
-        });
+        // Ordered: the first shape is primary. One decode feeds them all.
+        const result = await renderZoomedEdit(source, cursorTrack, { targets: shapes });
         setTake((t) => (t ? { ...t, zoom: result } : t));
         notify(
           'info',
-          `Zoomed edit ready: ${result.output} (${result.frames} frames, ${result.keyframes} keyframes, ${result.tookSeconds}s)`,
+          `${result.outputs.length} zoomed edit${result.outputs.length === 1 ? '' : 's'} ready in ${result.tookSeconds}s: ` +
+            result.outputs.map((o) => `${o.label} ${o.width}×${o.height}`).join(', '),
         );
         await record(
           'recording_zoomed',
@@ -518,6 +523,7 @@ export function StudioSection({ workspace }: SectionProps) {
             keyframes: result.keyframes,
             durationSeconds: result.durationSeconds,
             tookSeconds: result.tookSeconds,
+            shapes: result.outputs.map((o) => ({ label: o.label, path: o.path, bytes: o.bytes })),
             notes: result.notes,
           },
           cause ? [cause] : [],
@@ -1246,11 +1252,17 @@ export function StudioSection({ workspace }: SectionProps) {
                   {take.cursorTrack ? (
                     take.zoom ? (
                       <>
-                        <p className="break-all font-mono text-[10px] text-chart-4" data-testid="text-take-zoom">
-                          {take.zoom.output}
-                        </p>
+                        {take.zoom.outputs.map((shape) => (
+                          <p
+                            key={shape.label}
+                            className="break-all font-mono text-[10px] text-chart-4"
+                            data-testid={`text-take-zoom-${shape.label}`}
+                          >
+                            {shape.label} · {shape.width}×{shape.height} · {formatBytes(shape.bytes)} — {shape.path}
+                          </p>
+                        ))}
                         <p className="font-mono text-[10px] text-muted-foreground">
-                          {take.zoom.width}×{take.zoom.height} · {take.zoom.keyframes} keyframes · {take.zoom.frames} frames · {take.zoom.tookSeconds}s
+                          {take.zoom.keyframes} keyframes · {take.zoom.frames} frames decoded once · {take.zoom.tookSeconds}s
                         </p>
                       </>
                     ) : zooming ? (
@@ -1262,18 +1274,56 @@ export function StudioSection({ workspace }: SectionProps) {
                         {zoomPlan.notes[0] ?? 'The cursor never settled long enough to justify a zoom.'}
                       </p>
                     ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7"
-                        onClick={() => void renderZoom(take.path, take.cursorTrack!, null)}
-                        data-testid="button-zoom"
-                      >
-                        <Crosshair className="mr-1.5 h-3 w-3" />
-                        {zoomPlan
-                          ? `Zoomed edit · ${countZooms(zoomPlan.keyframes)} zoom${countZooms(zoomPlan.keyframes) === 1 ? '' : 's'}`
-                          : 'Zoomed edit'}
-                      </Button>
+                      <>
+                        {/* Which shapes to render. Vertical is only worth
+                            offering because the cursor track exists: a 9:16
+                            crop of a 16:9 screen discards ~68% of the width,
+                            so a blind centre-crop would be useless. */}
+                        <div className="flex flex-wrap gap-1">
+                          {ZOOM_SHAPES.map((shape) => {
+                            const on = zoomShapes.includes(shape.label);
+                            return (
+                              <button
+                                key={shape.label}
+                                type="button"
+                                title={shape.hint}
+                                onClick={() =>
+                                  setZoomShapes((current) =>
+                                    current.includes(shape.label)
+                                      ? // Never leave nothing selected — there
+                                        // would be nothing to render.
+                                        current.length === 1
+                                        ? current
+                                        : current.filter((l) => l !== shape.label)
+                                      : [...current, shape.label],
+                                  )
+                                }
+                                className={cn(
+                                  'rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+                                  on
+                                    ? 'border-primary/60 bg-primary/15 text-foreground'
+                                    : 'border-border/60 text-muted-foreground hover:text-foreground',
+                                )}
+                                data-testid={`toggle-shape-${shape.label}`}
+                              >
+                                {shape.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7"
+                          onClick={() => void renderZoom(take.path, take.cursorTrack!, null, zoomShapes)}
+                          data-testid="button-zoom"
+                        >
+                          <Crosshair className="mr-1.5 h-3 w-3" />
+                          {zoomPlan
+                            ? `Zoomed edit · ${countZooms(zoomPlan.keyframes)} zoom${countZooms(zoomPlan.keyframes) === 1 ? '' : 's'}`
+                            : 'Zoomed edit'}
+                        </Button>
+                      </>
                     )
                   ) : (
                     <p className="text-[10px] text-muted-foreground">

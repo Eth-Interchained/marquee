@@ -271,3 +271,59 @@ class OutputPath(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Targets(unittest.TestCase):
+    def test_the_three_shapes_have_the_aspects_their_names_claim(self):
+        self.assertAlmostEqual(zoom.TARGET_WIDE.aspect, 16 / 9, places=4)
+        self.assertAlmostEqual(zoom.TARGET_SQUARE.aspect, 1.0, places=4)
+        self.assertAlmostEqual(zoom.TARGET_VERTICAL.aspect, 9 / 16, places=4)
+        # Every delivery size must be even on both axes — H.264 4:2:0 again.
+        for target in zoom.KNOWN_TARGETS.values():
+            self.assertEqual(target.width % 2, 0, target.label)
+            self.assertEqual(target.height % 2, 0, target.label)
+
+    def test_output_paths_are_distinct_and_never_the_source(self):
+        source = "/v/take.mkv"
+        paths = {t.label: zoom.target_output_path(source, t) for t in zoom.KNOWN_TARGETS.values()}
+        # The primary shape keeps the plain name; the others carry their label,
+        # so a folder of exports reads without opening anything.
+        self.assertEqual(paths["16x9"], "/v/take.zoomed.mp4")
+        self.assertEqual(paths["1x1"], "/v/take.zoomed-1x1.mp4")
+        self.assertEqual(paths["9x16"], "/v/take.zoomed-9x16.mp4")
+        # No collisions, and none of them is the recording.
+        self.assertEqual(len(set(paths.values())), 3)
+        for path in paths.values():
+            self.assertNotEqual(path, source)
+
+    def test_an_mp4_source_does_not_become_its_own_output(self):
+        for target in zoom.KNOWN_TARGETS.values():
+            self.assertNotEqual(zoom.target_output_path("/v/take.mp4", target), "/v/take.mp4")
+
+    def test_whichever_shape_is_first_gets_the_plain_name(self):
+        # Rendering only vertical should not leave a file named for widescreen.
+        self.assertEqual(
+            zoom.target_output_path("/v/take.mkv", zoom.TARGET_VERTICAL, primary_label="9x16"),
+            "/v/take.zoomed.mp4",
+        )
+        self.assertEqual(
+            zoom.target_output_path("/v/take.mkv", zoom.TARGET_WIDE, primary_label="9x16"),
+            "/v/take.zoomed-16x9.mp4",
+        )
+
+    def test_a_vertical_crop_of_a_widescreen_source_keeps_the_zoom_level(self):
+        # The point of vertical: 9:16 out of 16:9 discards ~68% of the width, so
+        # the crop must be aimed, and it must still be a real zoom rather than
+        # quietly widening to fill the shape.
+        cx, cy, scale = 0.22, 0.25, 0.5
+        _, _, vw, vh = zoom.crop_rect(cx, cy, scale, 2560, 1440, zoom.TARGET_VERTICAL.aspect)
+        self.assertAlmostEqual(vw / vh, 9 / 16, delta=0.02)
+        # Half-scale of the largest 9:16 rect that fits 1440 tall.
+        self.assertAlmostEqual(vh, 720, delta=2)
+
+    def test_a_crop_aimed_off_centre_is_not_the_centre_crop(self):
+        # Guards the whole thesis: if these ever coincide, the cursor track is
+        # not actually steering the frame.
+        aimed = zoom.crop_rect(0.22, 0.25, 0.5, 2560, 1440, zoom.TARGET_VERTICAL.aspect)
+        centred = zoom.crop_rect(0.5, 0.5, 0.5, 2560, 1440, zoom.TARGET_VERTICAL.aspect)
+        self.assertNotEqual(aimed[0], centred[0], "the vertical crop must follow the cursor, not the centre")
