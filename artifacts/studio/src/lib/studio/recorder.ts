@@ -402,9 +402,31 @@ export type ZoomPlanResult = {
   notes: string[];
 };
 
+/** One delivery shape the runtime can render. Mirrors zoom.py's KNOWN_TARGETS. */
+export const ZOOM_SHAPES = [
+  { label: '16x9', name: 'Wide', hint: '1920×1080 — YouTube, a landing page' },
+  { label: '1x1', name: 'Square', hint: '1080×1080 — a feed post' },
+  { label: '9x16', name: 'Vertical', hint: '1080×1920 — Reels, Shorts, TikTok' },
+] as const;
+
+export type ZoomShapeLabel = (typeof ZOOM_SHAPES)[number]['label'];
+
+export type ZoomOutput = {
+  label: string;
+  path: string;
+  width: number;
+  height: number;
+  bytes: number;
+  durationSeconds: number | null;
+  hasAudio: boolean;
+  cropGraphs: number;
+};
+
 export type ZoomRenderResult = {
   source: string;
+  /** The primary file — the first shape requested. */
   output: string;
+  outputs: ZoomOutput[];
   cursorTrack: string;
   outputBytes: number;
   width: number;
@@ -467,8 +489,11 @@ export function fetchZoomPlan(
 export function renderZoomedEdit(
   source: string,
   cursorTrack: string,
-  options: { outWidth?: number; outHeight?: number; zoomScale?: number } = {},
+  options: { targets?: readonly string[]; zoomScale?: number } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<ZoomRenderResult> {
+  // `targets` is ordered: the FIRST shape is primary and gets the plain
+  // `.zoomed.mp4`. One decode feeds every shape, because decoding is the
+  // expensive half of the render.
   return runtimePost<ZoomRenderResult>('/runtime/zoom', { source, cursorTrack, ...options }, fetchImpl);
 }

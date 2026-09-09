@@ -108,3 +108,52 @@ binary file handed over as a track (says so in words, rather than leaking a
   someone hunting for a recording that is sitting right there.
 - **Runs in `asyncio.to_thread`.** A long render on the event loop would block
   `/health` long enough for the supervisor to restart the runtime mid-encode.
+
+## Multi-aspect export, and why vertical needs the cursor track
+
+One take renders to as many delivery shapes as asked for — **16x9** (1920x1080),
+**1x1** (1080x1080), **9x16** (1080x1920) — and the **source is decoded once**
+for all of them. Rendering three aspects as three passes would decode a 4K take
+three times, and decoding is the expensive half. Each shape gets its own
+encoder and its own filter-graph cache; only the crop RECT differs, since the
+crop CENTRE comes from one shared plan.
+
+Measured: three shapes from a 6s 2560x1440 clip in **25.7s**, against ~45s for
+three separate renders.
+
+**A 9:16 crop of a 16:9 screen discards about 68% of the width.** A blind
+centre-crop is therefore useless for a screen recording — you would be cropping
+away most of what was on screen with no idea what mattered. Vertical export is
+only worth offering *because* the cursor track says where the work was. Proven
+with ffmpeg PSNR against the rendered vertical frame:
+
+| Compared against | PSNR | Reading |
+|---|---|---|
+| the cursor-followed crop | **60.4 dB** | identical |
+| a blind centre crop | **3.1 dB** | nothing alike |
+
+Same for square: 56.5 dB against its aimed crop, 2.8 dB against the centre.
+
+Details that matter:
+
+- **The FIRST shape requested is primary** and gets the plain `.zoomed.mp4`;
+  the rest carry their label (`.zoomed-9x16.mp4`). Ask for vertical first and
+  the plain-named file is vertical — deliberate, so "the one I wanted" is the
+  one without a suffix.
+- **Duplicates are dropped, order preserved.** Two identical labels would
+  collide on one output path.
+- **Bitrate scales with pixel count**, so a 1080x1080 square is not handed the
+  same budget as a 1920x1080 frame.
+- **Every container is closed in a `finally`.** A half-written MP4 with no moov
+  atom looks exactly like corruption.
+- The UI never lets the last shape be deselected — there would be nothing to
+  render.
+
+### A 500 that should have been a 422
+
+The target-validation `HTTPException` was originally raised INSIDE the route's
+`try`, where the broad `except Exception` caught it and re-wrapped it: a
+request for an unknown shape came back as **500** with `HTTPException: 422`
+buried in the message, telling the caller a bad request was a server fault.
+Fixed by validating before the `try`, and both `/zoom` and `/remux` now carry
+an explicit `except HTTPException: raise` so the whole class cannot recur.
