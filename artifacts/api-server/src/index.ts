@@ -18,9 +18,10 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-// The shell binds this to loopback: a process holding the publishing
-// capability has no business being reachable from the LAN. Replit needs the
-// default (all interfaces) so its proxy can reach the artifact.
+// The shell always sets HOST=127.0.0.1: a process holding the publishing
+// capability has no business being reachable from the LAN. The default stays
+// all-interfaces only for the web development surface, where this server holds
+// no such capability and may be served from another host.
 const host = process.env["HOST"]?.trim() || "0.0.0.0";
 
 app.listen(port, host, (err?: Error) => {

@@ -12,10 +12,8 @@
   },
   "dependencies": {
     "@marquee/api-zod": "workspace:*",
-    "@marquee/db": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
-    "drizzle-orm": "catalog:",
     "express": "^5.2.1",
     "nedb-engine": "^2.8.2",
     "pino": "^9.14.0",

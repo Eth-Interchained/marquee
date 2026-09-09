@@ -111,7 +111,6 @@ artifacts/
   studio/             React + Vite renderer: the sidebar app, Studio, Terminal
     src/lib/studio/    Studio compositor: scene graph, canvas renderer, capture, mixer (pure, tested; from Eth-Interchained/marquee)
   api-server/          Express API: state, AI, scheduling, publish gateway
-  mockup-sandbox/      Replit-only component preview surface; not part of the product
 desktop/
   shell/               Electron shell: the actual browser, the only publisher, and the runtime host
     vendor/jenny/      Jenny's Python orchestrator, copied VERBATIM (sha256 pinned) — never edit
@@ -123,8 +122,6 @@ lib/
   api-spec/            openapi.yaml — the contract, and the codegen entrypoint
   api-zod/             generated zod schemas (do not hand-edit)
   api-client-react/    generated react-query hooks (do not hand-edit)
-  db/                  template leftover; declared as a dependency, never imported
-scripts/               template leftover
 .agents/memory/        durable notes for agents (see §12)
 ```
 
@@ -177,7 +174,7 @@ workspace UI  ──fetch /api/*──▶  API server  ──loopback + token─
 
 - In the shell, the UI is served from a loopback origin that proxies `/api` to
   the API server, so the UI's relative fetches work unchanged in both places.
-- On Replit the UI hits the API server artifact directly at `/api`.
+- On the web development surface the UI hits the API server directly at `/api`.
 - `window.marqueeShell` (typed in `artifacts/studio/src/lib/shell-bridge.ts`)
   exists only inside the shell: `attachSurface`, `openInWorkspaceTab`,
   `getSessionStatus`. Web-surface code must degrade honestly when it is absent.
@@ -186,13 +183,15 @@ workspace UI  ──fetch /api/*──▶  API server  ──loopback + token─
 
 ## 5. Running it
 
-### On Replit (development)
+### The web development surface
 
-Three workflows, already configured — restart them rather than inventing new ones:
+Two processes, in separate terminals:
 
-- `artifacts/api-server: API Server`
-- `artifacts/studio: web`
-- `artifacts/mockup-sandbox: Component Preview Server`
+- `pnpm --filter @marquee/api-server run dev` — the API on `PORT`, mounted at `/api`
+- `PORT=5173 BASE_PATH=/ pnpm --filter @marquee/studio run dev` — the Vite dev server
+
+There is no shell here, so the Terminal has no runtime to connect to and
+publishing answers 503. Both say so rather than pretending.
 
 Both app services read `PORT` from the environment. The Vite config *throws* if
 `PORT` or `BASE_PATH` is missing — that is deliberate, not a bug to patch out.
@@ -441,8 +440,7 @@ posted with a working "View it on X" link. That is one post on one account;
 treat it as proof the path works, not as coverage of every X UI state.
 
 **Not verified, and must not be described as working:** the six shared-composer
-adapters against real accounts (§7). No display exists in the Replit container,
-so nobody has watched them run.
+adapters against real accounts (§7). Nobody has watched them run.
 
 **A fresh install is empty.** `artifacts/studio/src/data.ts` boots
 with no workspaces, drafts, accounts, or activity, and no approver name. The
@@ -482,12 +480,11 @@ multi-tenant auth layer.
 
 ## 12. Traps that have already cost time
 
-- **Native binaries.** The Replit workspace template excluded every
+- **Native binaries.** The upstream workspace template excluded every
   non-linux-x64 optional binary (rollup, esbuild, lightningcss, Tailwind oxide)
   via `"-"` overrides in `pnpm-workspace.yaml`. That makes the repo unbuildable
   on macOS/Windows — where the shell is actually packaged — with
-  `Cannot find module @rollup/rollup-darwin-x64`. They have been removed. If a
-  template sync brings them back, remove them again.
+  `Cannot find module @rollup/rollup-darwin-x64`. They have been removed.
 - **Seed data reached a real audience.** `data.ts` once shipped a fictional
   operator ("Alex Morgan"), fictional accounts, and sample drafts so the UI
   looked alive. The owner approved one of those sample drafts while the sample
@@ -517,15 +514,6 @@ multi-tenant auth layer.
   about whether the page ever arrived.
 - **`pnpm install` after pulling** if the lockfile moved, and delete
   `node_modules` if it was populated under the old lockfile.
-- **`scripts/post-merge.sh`** runs `pnpm --filter db push`, inherited from the
-  template. This project does not use that database; if a merge trips on it,
-  that is why.
-- **The Replit container is ephemeral.** Nothing counts until it is pushed to
-  GitHub. The `origin` remote sometimes loses its credential in a fresh
-  container; push with the stored PAT rather than rewriting the remote URL:
-  ```bash
-  git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_PAT" | base64 -w0)" push origin main
-  ```
   Never print or commit the token.
 - **Agent memory** lives in `.agents/memory/` (index + topic files) and is
   committed with the code. Read it before starting; add a topic file when you

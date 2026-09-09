@@ -11,7 +11,7 @@ link resolved to the live status. That is the first time any adapter in this
 repo was observed doing the thing it claims to do.
 
 **Why this matters:** every earlier note said "no adapter has been watched
-working, X included" because the Replit container has no display and no
+working, X included" because the development surface has no display and no
 sessions. That sentence is now false for X and still true for the other six
 driven networks. The docs (`AGENTS.md § 7/§ 11`, `README.md`, `DEPLOY.md § 5/§ 10`)
 were updated in the same commit as this file.

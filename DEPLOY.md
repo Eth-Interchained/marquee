@@ -4,11 +4,12 @@ This project has two halves that ship on different tracks:
 
 | Half | What it is | Where it runs |
 | --- | --- | --- |
-| **Workspace surface** (`artifacts/studio`, `artifacts/api-server`) | The sidebar UI, the AI endpoints, the review queue, the ledger | Replit today; embedded in the desktop shell in production |
+| **Workspace surface** (`artifacts/studio`, `artifacts/api-server`) | The sidebar UI, the AI endpoints, the review queue, the ledger | A browser, for development; embedded in the desktop shell in production |
 | **Native shell** (`desktop/shell`) | A Chromium desktop browser with per-workspace session isolation, UA profiles, and the session bridge | Built and signed on your own machines |
 
-The Replit artifact is the **development surface** for the shared UI and API. It is
-not the shipped product, and it deliberately cannot post to any network — see
+The web surface is the **development surface** for the shared UI and API. It is
+not the shipped product, and it deliberately cannot post to any network or open
+a terminal — see
 [Why publishing fails on the web surface](#why-publishing-fails-on-the-web-surface).
 
 ---
@@ -84,18 +85,17 @@ build both halves the shell hosts with `PORT=5173 BASE_PATH=/ pnpm --filter
 @marquee/studio run build` and `pnpm --filter @marquee/api-server
 run build`, then launch `pnpm --filter @marquee/shell run start`, which
 builds the Electron shell, spawns its own API server on loopback, and opens the
-browser — this one needs a desktop with a display and will not run in the Replit
-container. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
+browser — this one needs a desktop with a display. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
 
 ---
 
 ## 1. Prerequisites
 
-- Node 24 and pnpm (already provisioned in the Replit container)
-- `AIASSIST_API_KEY` — set as a Replit Secret; it never leaves the API server
+- Node 24 and pnpm
+- `AIASSIST_API_KEY` — read only by the API server; it never reaches a renderer
 - For the native shell: a desktop OS with a display. The shell is a Chromium
-  (Electron) application; it cannot run in the Replit container, which has no
-  GUI. Everything in it except the browser windows themselves — the session
+  (Electron) application, so it needs a real desktop session (or Xvfb on a
+  headless Linux box). Everything in it except the browser windows themselves — the session
   bridge, the idempotency ledger, the UA/Client-Hints derivation, the privileged
   origin — is covered by `pnpm --filter @marquee/shell run test`, which does
   run here.
@@ -108,7 +108,7 @@ Error: Cannot find module @rollup/rollup-darwin-x64
 
 Rollup, esbuild, lightningcss and Tailwind's oxide each ship one compiled binary
 per platform, pulled in as an optional dependency. The workspace template this
-repo grew out of excluded every non-linux-x64 one, because Replit only runs
+repo grew out of excluded every non-linux-x64 one, because it only ever ran on
 linux-x64 — which quietly made the repo unbuildable on the Mac and Windows
 machines that package the desktop shell. Those exclusions are gone; pnpm picks
 the binary for whatever host it is installing on.
@@ -127,12 +127,12 @@ pnpm install
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `AIASSIST_API_KEY` | yes | — | Credential for `api.AiAssist.net`. Server-side only. The former spelling `AIAssIST_API_KEY` is still read as a fallback and logs a deprecation warning on first use; migrate and delete it, because two names for one credential is how an environment ends up with a stale copy nobody notices. |
-| `PORT` | injected | `8080` | Assigned per artifact by Replit. Never hard-code it. |
+| `PORT` | no | `8080` | Port for the API server. Set by the shell for the child it spawns; never hard-code it. |
 | `NEDB_DATA_DIR` | no | `<cwd>/.data/marquee` | Append-only ledger location. Point it at a persistent volume in the desktop build. |
 | `MARQUEE_SESSION_BRIDGE_URL` | no | unset | Loopback address of the native shell's publisher IPC endpoint. **Unset means publishing is disabled.** |
 | `MARQUEE_SESSION_BRIDGE_TOKEN` | with the above | unset | Capability token the shell mints at startup. The shell refuses every bridge call without it, so an address on its own also means publishing is disabled. Set by the shell for the API server it starts; never commit it. |
 | `MARQUEE_API_ACCESS_TOKEN` | in the shell | unset | When set, every `/api` request must present it in `X-Marquee-Api-Token` and CORS is switched off entirely. The shell mints one for the API server it starts, and reads this variable to pair with an API server you run yourself. Unset on the web surface, which holds no publishing capability. |
-| `HOST` | no | `0.0.0.0` | Interface to bind. The shell sets `127.0.0.1`; Replit needs the default so its proxy can reach the artifact. |
+| `HOST` | no | `0.0.0.0` | Interface to bind. The shell always sets `127.0.0.1`; the default stays all-interfaces only for the development surface, which holds no publishing capability. |
 | `MARQUEE_TENANCY_MODE` | no | `single` | `single` scopes every document to the `personal` tenant. `multi` requires an auth layer to set `res.locals.tenantId` and returns 401 without one. |
 | `MARQUEE_SCHEDULER_INTERVAL_MS` | no | `30000` | How often the scheduler looks for scheduled posts that are due. `0` switches automatic dispatch off; a scheduled post then waits for someone to press Post. Ignored in multi-tenant mode — see [Scheduled dispatch](#6-scheduled-dispatch). |
 
@@ -164,10 +164,10 @@ pnpm --filter @marquee/api-spec run codegen   # after any OpenAPI change
 pnpm run typecheck                              # libs + all artifacts
 ```
 
-Both services run as Replit workflows and restart on their own:
+Run the two halves in separate terminals:
 
-- `artifacts/api-server: API Server` → `http://localhost:8080`, mounted at `/api`
-- `artifacts/studio: web` → the Vite dev server, preview path `/`
+- `pnpm --filter @marquee/api-server run dev` → `http://localhost:8080`, mounted at `/api`
+- `PORT=5173 BASE_PATH=/ pnpm --filter @marquee/studio run dev` → the Vite dev server
 
 Smoke test the API:
 
@@ -179,15 +179,14 @@ curl -s "localhost:8080/api/session/status?workspaceId=ws-1"
 curl -s localhost:8080/api/schedule/status
 ```
 
-## 4. Publishing the web surface on Replit
+## 4. Publishing the web surface
 
-Use the workspace's Publish flow (Autoscale). It deploys the sidebar UI and the
-API server. Set `AIASSIST_API_KEY` in the deployment's secrets — deployment
-secrets are separate from development secrets. Leave `MARQUEE_SESSION_BRIDGE_URL`
-unset in that environment.
-
-The ledger writes to local disk, so an Autoscale deployment treats its store as
-ephemeral. Anything you want to keep lives on the desktop build.
+There is no hosted deployment of marquee, and it is not clear there should be
+one: the product is the desktop shell, the ledger writes to local disk, and a
+hosted copy can neither post nor open a terminal. If you ever want the
+development surface reachable from another machine, serve
+`artifacts/studio/dist/public` as static files behind the API server and leave
+`MARQUEE_SESSION_BRIDGE_URL` unset there so publishing stays refused.
 
 ## 5. The native shell
 
