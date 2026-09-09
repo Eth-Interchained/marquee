@@ -797,9 +797,21 @@ export function StudioSection({ workspace }: SectionProps) {
               ))}
             </div>
           ) : picker.error ? (
-            <p className="rounded-md border border-destructive/50 p-3 font-mono text-xs text-destructive">{picker.error}</p>
+            <div className="flex flex-col gap-2">
+              <p className="rounded-md border border-destructive/50 p-3 font-mono text-xs text-destructive">{picker.error}</p>
+              <Button size="sm" variant="outline" onClick={() => void openPicker()} data-testid="button-picker-refresh">
+                Try again
+              </Button>
+            </div>
           ) : picker.sources.length === 0 ? (
-            <p className="text-sm text-muted-foreground">The OS reported no capturable screens or windows. On macOS, grant Screen Recording permission to the app and try again.</p>
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-muted-foreground">
+                The OS reported no capturable screens or windows just now. On macOS, grant Screen Recording permission to the app; otherwise the list can be briefly empty while displays settle — refresh it.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => void openPicker()} data-testid="button-picker-refresh">
+                Refresh sources
+              </Button>
+            </div>
           ) : (
             <div className="grid max-h-[60vh] grid-cols-3 gap-3 overflow-y-auto pr-1">
               {[...picker.sources]

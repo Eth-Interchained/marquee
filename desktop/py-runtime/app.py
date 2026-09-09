@@ -35,6 +35,7 @@ import logging
 import os
 import platform
 import pty
+import re
 import select
 import signal
 import struct
@@ -52,6 +53,41 @@ from pydantic import BaseModel, Field
 
 VERSION = "0.1.0"
 log = logging.getLogger("ua-py-runtime")
+
+# Logging is configured at IMPORT time, not in main(): in development Jenny's
+# orchestrator launches `python -m uvicorn app:app --reload`, which never calls
+# main(). Anything only main() configured would silently not apply there.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+# uvicorn's access log prints the full request target, and the PTY WebSocket
+# handshake carries the capability token in its query string. This process's
+# stdout is forwarded by Jenny's LogAggregator to a file on disk, so the access
+# log would write the token to disk on every terminal open. Off, always — the
+# events that matter are logged explicitly below, without the token.
+logging.getLogger("uvicorn.access").disabled = True
+
+
+class _RedactToken(logging.Filter):
+    """Belt and braces: scrub `token=<value>` out of any record that slips through."""
+
+    _pattern = re.compile(r"(token=)[^&\s\"']+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and "token=" in record.msg:
+            record.msg = self._pattern.sub(r"\1[redacted]", record.msg)
+        if record.args:
+            record.args = tuple(self._pattern.sub(r"\1[redacted]", a) if isinstance(a, str) and "token=" in a else a for a in record.args)
+        return True
+
+
+# uvicorn's *error* logger (not only access) announces WebSocket handshakes at
+# INFO with the full target — that is the second place the token appeared.
+# Warnings and errors stay; the INFO chatter ("connection open") goes.
+_uv_error = logging.getLogger("uvicorn.error")
+_uv_error.setLevel(logging.WARNING)
+for _lg in (logging.getLogger(), _uv_error, logging.getLogger("uvicorn")):
+    _lg.addFilter(_RedactToken())
+    for _h in _lg.handlers:
+        _h.addFilter(_RedactToken())
 
 TOKEN = os.environ.get("UA_PY_RUNTIME_TOKEN", "")
 PORT = int(os.environ.get("JENNY_PORT") or os.environ.get("UA_PY_RUNTIME_PORT") or "18764")
@@ -150,6 +186,7 @@ async def run_code(req: RunCodeRequest) -> dict[str, Any]:
             log.warning("could not remove temp file %s: %s", path, exc)
     cap = req.max_output_bytes
     truncated = len(out) > cap or len(err) > cap
+    log.info("run_code language=%s exit=%s timed_out=%s duration_ms=%d", req.language, proc.returncode, timed_out, round((time.monotonic() - started) * 1000))
     return {
         "language": req.language,
         "exit_code": proc.returncode,
@@ -277,11 +314,16 @@ async def ws_pty(ws: WebSocket) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
     if not TOKEN:
         log.warning("UA_PY_RUNTIME_TOKEN is not set — every route except /health will answer 401")
     log.info("UA Python runtime v%s on 127.0.0.1:%d (workspace %s)", VERSION, PORT, WORKSPACE)
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
+    # access_log=False on purpose: uvicorn's access line prints the full request
+    # target, and the WebSocket handshake carries the capability token in its
+    # query string. Jenny's LogAggregator forwards this process's stdout to a
+    # file on disk, so an access log here would write the token to disk on
+    # every PTY open. The events that matter (pty spawned/closed, run_code)
+    # are logged explicitly, without the token.
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info", access_log=False)
 
 
 if __name__ == "__main__":

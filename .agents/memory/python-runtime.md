@@ -42,6 +42,21 @@ env option. `spawn` runs synchronously inside `start()`, so no other child
 (the API server, a workspace surface) ever inherits it. A test asserts the
 variable is gone from the parent after spawn.
 
+## The runtime's stdout is a file on disk — never log the token
+
+Found by booting the real shell headless: uvicorn's access log printed the PTY
+WebSocket target, `?token=…` included, and Jenny's LogAggregator wrote it to
+`.jenny/logs`. Fixed by disabling `uvicorn.access` at IMPORT time in `app.py`.
+
+**Why import time:** in development Jenny launches `python -m uvicorn app:app
+--reload`, which never calls `main()`. Anything only `main()` configured
+(logging, access_log=False) silently did not apply — the first fix attempt
+proved that.
+
+**How to apply:** log the events that matter (`pty spawned`, `run_code`)
+explicitly, without the token; grep the shell log for `token=` after any
+change to the runtime's logging — the count must not grow.
+
 ## The terminal is a PTY served by Python, not node-pty
 
 `/ws/pty` forks a real pseudo-terminal (stdlib `pty`) for one of a closed list
