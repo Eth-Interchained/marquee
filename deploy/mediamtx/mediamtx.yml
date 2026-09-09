@@ -48,7 +48,11 @@ authInternalUsers:
 api: true
 apiAddress: 127.0.0.1:9997   # loopback only
 
-rtsp: false
+# RTSP on loopback only: it is how fanout.py reads the stream back from this
+# process for the RTMP tee. Not reachable from outside.
+rtsp: true
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
 rtmp: true                    # inbound RTMP too, for OBS users who insist
 rtmpAddress: :1935
 
@@ -74,9 +78,12 @@ srt: false
 # ── paths ───────────────────────────────────────────────────────────────────
 paths:
   ~^marquee/.*$:
-    # step 4 — RTMP fan-out. Uncomment and fill keys. One ffmpeg per destination
-    # is the plain version; a single `-f tee` muxer is the frugal one.
-    # runOnReady: >
-    #   ffmpeg -i rtsp://127.0.0.1:8554/$MTX_PATH -c copy -f flv rtmp://live.twitch.tv/app/$TWITCH_KEY
-    # runOnReadyRestart: yes
+    # RTMP fan-out: ONE ffmpeg (video copied, audio → AAC) tee'd to every
+    # destination in ~/.config/marquee/fanout.env (see fanout.py). Keys live in
+    # that file, owner-readable, never here. With no env file the script exits
+    # 0 and says so, so a path without destinations does not restart-loop.
+    # CHANGE the absolute path to where you put fanout.py on the VPS.
+    # (mediamtx ≥1.21 name; `runOnReady` is the deprecated alias.)
+    runOnAvailable: python3 /home/CHANGE-ME/mediamtx/fanout.py $MTX_PATH
+    runOnAvailableRestart: yes
   all_others:

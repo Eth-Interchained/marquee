@@ -45,6 +45,29 @@ server is broken" rather than "the server never told me where it is".
 **How to apply:** on the VPS set `webrtcAdditionalHosts: ['<public IP>']`.
 An ICE timeout after a good 201 is a candidates problem, not an auth problem.
 
+## RTMP auth is the opposite of WHIP's
+
+mediamtx takes RTMP credentials from the URL query
+(`rtmp://host:1935/path?user=…&pass=…`); `user:pass@host` fails with
+"authentication failed". WHIP takes Basic (or `Bearer user:pass`) and refuses a
+bare Bearer. Verified against v1.21.0.
+
+## Fan-out: one ffmpeg tee, keys in an owner-only env file, idle paths park
+
+`deploy/mediamtx/fanout.py` runs on `runOnAvailable` (1.21 name; `runOnReady`
+is the deprecated alias), reads the stream back over loopback RTSP, and tees
+`-c:v copy` / AAC to every `FANOUT_<NAME>` in `~/.config/marquee/fanout.env`.
+
+**Why park:** `runOnAvailableRestart: yes` re-runs the command on ANY exit, so
+a script that exits 0 for "nothing to do" is restarted every 5 s per idle path
+(seen live in the log). Parking (`exec sleep infinity`) holds the slot until
+mediamtx ends it. `--print` still exits, so tests and operators can inspect
+the exact ffmpeg argv with keys redacted.
+
+**Proven end to end in the sandbox:** RTMP publish → path ready →
+runOnAvailable → tee → second path ready with bytes climbing → HLS master
+playlist 200 with real segments and readers attached.
+
 ## What the sandbox proved, and what it did not
 
 Proven against the real v1.21.0 binary with a real WebRTC stack (werift):

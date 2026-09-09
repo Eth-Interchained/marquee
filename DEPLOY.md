@@ -359,6 +359,45 @@ Cloudflare's orange cloud — put the ingest hostname on a grey-cloud record or 
 the IP. If a creator's NAT is hostile, add a TURN server to `webrtcICEServers2`
 (coturn is free).
 
+### Fan-out to Twitch / YouTube / Kick
+
+One ffmpeg per stream, not one per platform: `deploy/mediamtx/fanout.py` reads
+the stream back from mediamtx over loopback RTSP and tees it (`-c:v copy`,
+audio → AAC) to every destination in an env file. mediamtx runs it on
+`runOnAvailable` for each `marquee/*` path.
+
+```bash
+mkdir -p ~/.config/marquee && chmod 700 ~/.config/marquee
+cat > ~/.config/marquee/fanout.env <<'EOF'
+FANOUT_TWITCH=rtmp://live.twitch.tv/app/live_xxxxxxxx
+FANOUT_YOUTUBE=rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx-xxxx-xxxx
+# FANOUT_KICK=rtmps://.../app/sk_...
+FANOUT_PATHS=marquee/*
+EOF
+chmod 600 ~/.config/marquee/fanout.env
+sudo apt install -y ffmpeg          # or a static build; fanout.py refuses loudly without it
+python3 fanout.py marquee/you --print   # shows the exact ffmpeg command, keys redacted
+```
+
+Then set the absolute path to `fanout.py` in `mediamtx.yml` (`runOnAvailable`;
+`runOnReady` is the deprecated alias in 1.21). Keys live only in that env file;
+never in the yml (committed) or the Studio (a page). `onfail=ignore` on each tee
+output means one platform rejecting its key does not take the others down. A
+path with nothing to do **parks** (the script says why once, then sleeps until
+mediamtx ends it) — an early exit would be restarted every 5 s by
+`runOnAvailableRestart`.
+
+**RTMP auth quirk (verified):** mediamtx reads RTMP credentials from the URL
+**query** — `rtmp://host:1935/marquee/you?user=marquee&pass=…` — not from
+`user:pass@host`, which fails with "authentication failed". WHIP is the
+opposite (Basic header). Both are written down so nobody re-learns them.
+
+**Proven end to end in the sandbox** with the real binaries: ffmpeg published a
+test pattern over RTMP → `marquee/src` ready → `runOnAvailable` ran
+`fanout.py` → one ffmpeg tee → `marquee/fanout-out` ready with 2 tracks and
+bytes climbing → HLS master playlist 200 (`avc1.64001e,mp4a.40.2`) with readers
+attached. Real frames, real segments.
+
 Verified in the sandbox against the real binary with a real WebRTC stack: WHIP
 `POST` → 201 + `Location` + SDP answer (H264/opus); bad/no credentials → 401;
 ICE connected and the session reached `publish`; DELETE → 200 ends it. **With
