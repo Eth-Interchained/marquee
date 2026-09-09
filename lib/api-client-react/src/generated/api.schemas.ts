@@ -409,10 +409,14 @@ export const StudioEventKind = {
   source_added: 'source_added',
   source_removed: 'source_removed',
   stream_error: 'stream_error',
+  recording_started: 'recording_started',
+  recording_stopped: 'recording_stopped',
+  recording_finalised: 'recording_finalised',
+  recording_error: 'recording_error',
 } as const;
 
 /**
- * Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added. Never a credential.
+ * Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added, the file path and byte count for recording_stopped, the codecs and whether the video was stream-copied for recording_finalised. Never a credential.
  */
 export type StudioEventInputPayload = { [key: string]: unknown };
 
@@ -422,7 +426,7 @@ export interface StudioEventInput {
   kind: StudioEventKind;
   /** When it happened on the operator's clock. Defaults to now. */
   at?: string;
-  /** Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added. Never a credential. */
+  /** Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added, the file path and byte count for recording_stopped, the codecs and whether the video was stream-copied for recording_finalised. Never a credential. */
   payload?: StudioEventInputPayload;
   /**
      * Ids of earlier events this one follows from.

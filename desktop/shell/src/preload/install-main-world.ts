@@ -84,6 +84,27 @@ export function installUaShellMainWorld(): boolean {
     studio: {
       listCaptureSources: () => host.captureSources(),
       selectCaptureSource: (selection: any) => host.captureSelect(selection),
+
+      /**
+       * Recording to disk. The page's MediaRecorder hands a Blob per
+       * timeslice; `writeChunk` reads it here, in the page's world, and sends
+       * the bytes across. The page therefore never accumulates the recording,
+       * which is what makes an hour-long take possible at all.
+       */
+      recording: {
+        begin: (mimeType: string, label?: string) => host.recordingBegin(mimeType, label),
+        writeChunk: async (id: string, blob: any) => {
+          if (!blob || typeof blob.arrayBuffer !== "function") {
+            throw new TypeError("writeChunk needs the Blob from MediaRecorder's dataavailable event.");
+          }
+          // A zero-byte chunk is normal (MediaRecorder emits them); the shell
+          // counts it as a no-op rather than an error.
+          return host.recordingWrite(id, await blob.arrayBuffer());
+        },
+        finish: (id: string) => host.recordingFinish(id),
+        abort: (id: string) => host.recordingAbort(id),
+        revealInFolder: (recordingPath: string) => host.recordingReveal(recordingPath),
+      },
     },
 
     /**

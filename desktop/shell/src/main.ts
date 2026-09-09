@@ -24,6 +24,7 @@ import { startSessionBridge, type SessionBridgeHandle } from "./session-bridge-s
 import { startWorkspaceUiServer, SHELL_COOKIE_NAME, type UiServerHandle } from "./ui-server";
 import { startPythonRuntime, type PythonRuntimeHandle } from "./python-runtime";
 import { CaptureBroker } from "./capture";
+import { RecordingSink } from "./recorder";
 import { allPermissions, openPermissionSettings, requestPermission } from "./permissions";
 import {
   reclaimOrphanedApiServer,
@@ -56,6 +57,7 @@ type Running = {
   ui: UiServerHandle | null;
   window: ShellWindow;
   refreshTimer: NodeJS.Timeout;
+  recordings: RecordingSink;
 };
 
 let running: Running | null = null;
@@ -266,13 +268,20 @@ async function bootstrap(): Promise<void> {
   const capture = new CaptureBroker();
   capture.install(session.defaultSession);
 
-  registerBridgeIpc(window, publisher.sessionStatus, capture);
+  // Recordings go where the operator will look for them — the OS Videos
+  // folder — not buried in an app-support directory. If the platform has no
+  // videos folder, they land beside the data directory instead; either way the
+  // real path is reported back to the UI, so there is never a guess about
+  // where a take went.
+  const recordings = new RecordingSink(recordingsDirectory(config.dataDir));
+
+  registerBridgeIpc(window, publisher.sessionStatus, capture, recordings);
 
   const refreshTimer = setInterval(() => {
     void directory.refresh().then(() => window.publishChromeState());
   }, DIRECTORY_REFRESH_MS);
 
-  running = { bridge, api, python, ui, window, refreshTimer };
+  running = { bridge, api, python, ui, window, refreshTimer, recordings };
 
   log.info("Shell ready", {
     workspaceUiUrl,
@@ -307,6 +316,25 @@ function writePairingFile(config: ShellConfig, url: string, token: string): void
   }
 }
 
+/**
+ * `~/Videos/marquee`, or `<dataDir>/recordings` when the platform has no
+ * videos folder. `app.getPath("videos")` THROWS on a system where the path is
+ * unset (headless Linux, some containers), so the fallback is a real code path
+ * and not defensive decoration.
+ */
+function recordingsDirectory(dataDir: string): string {
+  try {
+    return path.join(app.getPath("videos"), "marquee");
+  } catch (error) {
+    const fallback = path.join(dataDir, "recordings");
+    log.warn("This system reports no Videos folder; recordings will go to the data directory instead", {
+      fallback,
+      ...errorFields(error),
+    });
+    return fallback;
+  }
+}
+
 function registerBridgeIpc(
   window: ShellWindow,
   sessionStatus: (workspaceId: string) => Promise<{
@@ -318,6 +346,7 @@ function registerBridgeIpc(
     detail: string;
   }>,
   capture: CaptureBroker,
+  recordings: RecordingSink,
 ): void {
   /**
    * Only the privileged view may call these. Page content has no preload and
@@ -412,6 +441,58 @@ function registerBridgeIpc(
     capture.select(selection);
   });
 
+  ipcMain.handle(
+    CHANNELS.recordingBegin,
+    (event, payload: { mimeType: string; label?: string }) => {
+      privileged(event);
+      const mimeType = payload?.mimeType;
+      if (typeof mimeType !== "string" || mimeType.length === 0) {
+        throw new Error("recordingBegin: mimeType is required so the file gets the right extension.");
+      }
+      const label = typeof payload?.label === "string" ? payload.label : undefined;
+      return recordings.begin({ mimeType, label });
+    },
+  );
+
+  ipcMain.handle(
+    CHANNELS.recordingWrite,
+    (event, payload: { id: string; chunk: Uint8Array }) => {
+      privileged(event);
+      // A Uint8Array survives the structured clone; anything else means the
+      // renderer sent the Blob itself, which would arrive as an empty object
+      // and silently record nothing.
+      if (!(payload?.chunk instanceof Uint8Array)) {
+        throw new Error(
+          "recordingWrite: chunk must be a Uint8Array — read the Blob with arrayBuffer() before sending it.",
+        );
+      }
+      return recordings.write(payload.id, payload.chunk);
+    },
+  );
+
+  ipcMain.handle(CHANNELS.recordingFinish, async (event, payload: { id: string }) => {
+    privileged(event);
+    return recordings.finish(payload?.id);
+  });
+
+  ipcMain.handle(CHANNELS.recordingAbort, async (event, payload: { id: string }) => {
+    privileged(event);
+    return recordings.abort(payload?.id);
+  });
+
+  ipcMain.handle(CHANNELS.recordingReveal, async (event, payload: { path: string }) => {
+    privileged(event);
+    const target = payload?.path;
+    if (typeof target !== "string" || target.length === 0) {
+      throw new Error("recordingReveal: a path is required.");
+    }
+    // Only ever reveals a file in the OS file manager; it cannot open a URL or
+    // run anything, so a path from the page is not a capability escalation.
+    const { shell: electronShell } = await import("electron");
+    electronShell.showItemInFolder(target);
+    return { revealed: true, path: target };
+  });
+
   ipcMain.on(CHANNELS.chromeCommand, (_event, command: ChromeCommand) => {
     window.handleChromeCommand(command);
   });
@@ -423,6 +504,20 @@ async function shutdown(): Promise<void> {
   if (!current) return;
 
   clearInterval(current.refreshTimer);
+
+  // Close any recording still open BEFORE anything else goes down, so the
+  // Matroska on disk is flushed and playable. The file is kept either way —
+  // quitting mid-take costs you the tail, never the take.
+  const openTakes = current.recordings.openIds();
+  if (openTakes.length > 0) {
+    log.warn("Quitting while still recording; flushing and keeping the partial files", {
+      count: openTakes.length,
+    });
+    for (const closed of await current.recordings.closeAll()) {
+      log.info("kept a partial recording", { path: closed.path, bytes: closed.bytes });
+    }
+  }
+
   await current.ui?.close().catch(() => undefined);
   await current.bridge.close().catch(() => undefined);
   await current.api?.stop().catch(() => undefined);

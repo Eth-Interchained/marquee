@@ -46,6 +46,8 @@ import termios
 import time
 from typing import Any, Optional
 
+import remux
+
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -181,7 +183,45 @@ async def health() -> dict[str, Any]:
         "gated": bool(TOKEN),
         "programs": sorted(PROGRAMS),
         "pty": sys.platform != "win32",
+        # The Studio needs to know BEFORE it offers to record whether this
+        # runtime can finalise to MP4. None means PyAV is missing.
+        "remux": remux.library_versions(),
     }
+
+
+# ─── /remux ────────────────────────────────────────────────────────────────
+#
+# Chromium cannot write H.264 into an MP4 (measured — see remux.py), so the
+# Studio records H.264/opus Matroska and this turns it into a real MP4 by
+# copying the video stream. The source file is never deleted here.
+
+class RemuxRequest(BaseModel):
+    source: str = Field(min_length=1)
+    # `Optional[str]`, not `str | None`: pydantic EVALUATES model annotations, so
+    # PEP 604 unions raise a TypeError on Python 3.9 even under
+    # `from __future__ import annotations`. Function and dataclass annotations
+    # are fine because nothing evaluates them. This runtime has to start on
+    # whatever python3 the operator's machine has.
+    output: Optional[str] = None
+    audio_bitrate: int = Field(default=160_000, ge=32_000, le=512_000)
+
+
+@app.post("/remux")
+async def remux_recording(req: RemuxRequest) -> dict[str, Any]:
+    try:
+        # Off the event loop: a long recording would otherwise block /health
+        # and the supervisor would restart the runtime mid-finalise.
+        result = await asyncio.to_thread(remux.remux_to_mp4, req.source, req.output, req.audio_bitrate)
+    except remux.RemuxUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # a broken container, a full disk — name it, never swallow it
+        log.exception("remux failed for %s", req.source)
+        raise HTTPException(status_code=500, detail=f"remux failed: {type(exc).__name__}: {exc}")
+    return result.as_dict()
 
 
 # ─── /run_code ─────────────────────────────────────────────────────────────

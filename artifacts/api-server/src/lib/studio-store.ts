@@ -25,7 +25,23 @@ export const EVENTS = "studio_events";
 export const SCENES = "studio_scenes";
 export const CAUSED_BY = "caused_by";
 
-export const EVENT_KINDS = ["go_live", "stream_ended", "scene_saved", "source_added", "source_removed", "stream_error"] as const;
+// Recording kinds sit alongside the live ones on purpose: recording is the
+// primary act, so a take leaves the same tamper-evident trail a broadcast
+// does. `recording_finalised` is separate from `recording_stopped` because the
+// MP4 is a second artifact produced from the first, and losing that
+// distinction would make a failed finalise look like a failed recording.
+export const EVENT_KINDS = [
+  "go_live",
+  "stream_ended",
+  "scene_saved",
+  "source_added",
+  "source_removed",
+  "stream_error",
+  "recording_started",
+  "recording_stopped",
+  "recording_finalised",
+  "recording_error",
+] as const;
 export type StudioEventKind = (typeof EVENT_KINDS)[number];
 
 export type StudioEvent = {

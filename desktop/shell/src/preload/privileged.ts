@@ -16,6 +16,8 @@ import {
   type PermissionKind,
   type PermissionState,
   type Rect,
+  type RecordingBegun,
+  type RecordingClosed,
   type SurfaceAttachResult,
   type SurfaceOptions,
 } from "../ipc";
@@ -43,6 +45,19 @@ const host = {
     ipcRenderer.invoke(CHANNELS.permissionsRequest, { kind }),
   permissionsOpenSettings: (kind: PermissionKind): Promise<{ opened: boolean; detail: string }> =>
     ipcRenderer.invoke(CHANNELS.permissionsOpenSettings, { kind }),
+  recordingBegin: (mimeType: string, label?: string): Promise<RecordingBegun> =>
+    ipcRenderer.invoke(CHANNELS.recordingBegin, { mimeType, label }),
+  // Takes an ArrayBuffer, not a typed array: ArrayBuffer is the shape
+  // contextBridge is documented to clone, and the Uint8Array the main process
+  // expects is built here on the privileged side.
+  recordingWrite: (id: string, chunk: ArrayBuffer): Promise<{ bytes: number; chunks: number }> =>
+    ipcRenderer.invoke(CHANNELS.recordingWrite, { id, chunk: new Uint8Array(chunk) }),
+  recordingFinish: (id: string): Promise<RecordingClosed> =>
+    ipcRenderer.invoke(CHANNELS.recordingFinish, { id }),
+  recordingAbort: (id: string): Promise<RecordingClosed> =>
+    ipcRenderer.invoke(CHANNELS.recordingAbort, { id }),
+  recordingReveal: (recordingPath: string): Promise<{ revealed: boolean; path: string }> =>
+    ipcRenderer.invoke(CHANNELS.recordingReveal, { path: recordingPath }),
 };
 
 contextBridge.exposeInMainWorld("__marqueeShellHost", host);

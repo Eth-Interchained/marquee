@@ -27,6 +27,17 @@ export const CHANNELS = {
   permissionsStatus: "marquee:permissions:status",
   permissionsRequest: "marquee:permissions:request",
   permissionsOpenSettings: "marquee:permissions:open-settings",
+  /**
+   * Recording. The renderer runs the MediaRecorder and hands over one chunk
+   * per timeslice; the shell appends each to a file. Nothing is buffered in
+   * the page, so an hour of 1080p costs the page nothing and survives a
+   * reload of everything but the recorder itself.
+   */
+  recordingBegin: "marquee:recording:begin",
+  recordingWrite: "marquee:recording:write",
+  recordingFinish: "marquee:recording:finish",
+  recordingAbort: "marquee:recording:abort",
+  recordingReveal: "marquee:recording:reveal",
 } as const;
 
 /** Mirrors `PermissionKind` / `PermissionState` in permissions.ts. */
@@ -64,8 +75,32 @@ export type CaptureSelection = {
   withAudio: boolean;
 };
 
-/** Version reported as `window.marqueeShell.version`. */
-export const BRIDGE_VERSION = "1.0.0";
+/**
+ * What the shell answers when a recording starts. Mirrors `RecordingHandle`
+ * in recorder.ts.
+ */
+export type RecordingBegun = {
+  id: string;
+  path: string;
+  startedAt: string;
+};
+
+/** Mirrors `RecordingResult` in recorder.ts. */
+export type RecordingClosed = {
+  id: string;
+  path: string;
+  bytes: number;
+  durationMs: number;
+  chunks: number;
+  clean: boolean;
+};
+
+/**
+ * `version` is read by the page to decide whether a capability exists. Bumped
+ * to 1.1.0 for `studio.recording`: a page running against an older shell sees
+ * `recording` absent and says recording is unavailable rather than throwing.
+ */
+export const BRIDGE_VERSION = "1.1.0";
 
 export type Rect = { x: number; y: number; width: number; height: number };
 

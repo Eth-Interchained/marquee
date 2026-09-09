@@ -2,6 +2,10 @@ fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 websockets>=12.0
 pydantic>=2.5.0
+# Finalising a recording to a real MP4. PyAV ships prebuilt wheels with ffmpeg
+# bundled, so there is no system ffmpeg dependency — the app carries its own.
+# Needed because Chromium cannot write H.264 into an MP4 (see remux.py).
+av>=13.0.0
 # A terminal on Windows needs ConPTY; POSIX uses the stdlib `pty` module and
 # needs nothing. Platform-conditional so a mac/Linux install never tries to
 # build it.

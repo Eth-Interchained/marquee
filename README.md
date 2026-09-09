@@ -4,7 +4,7 @@
 
 **The whole broadcast studio in a browser you own.**
 
-Screen or game · a camera in the corner · a real terminal · go live to your own server · and receipts for everything that happened on air.
+Screen or game · a camera in the corner · a real terminal · **record it to MP4** · go live to your own server · and receipts for everything that happened on air.
 
 </div>
 
@@ -14,15 +14,16 @@ Screen or game · a camera in the corner · a real terminal · go live to your o
 
 Every creator tool splits the same way: the pixels are yours, the nervous system is rented. Your overlay is hosted by someone else, your alerts route through their cloud, your multi-destination fan-out is a subscription tier, and the record of what went out on your stream is a row in a database you cannot read.
 
-marquee is the other arrangement. The compositor runs in your browser. The ingest server is a single binary on your VPS. The terminal is a real pseudo-terminal from the Python that ships inside the app. And every on-air event — a source added, a scene saved, a go-live, a stream end — is an append-only, hash-chained document in a local [NEDB](https://github.com/Eth-Interchained/nedb) store, so *what happened on my stream* is a question you can answer with proof instead of a screenshot.
+marquee is the other arrangement. The compositor runs in your browser. The ingest server is a single binary on your VPS. The terminal is a real pseudo-terminal from the Python that ships inside the app. And every on-air event — a source added, a scene saved, a recording started and saved and finalised, a go-live, a stream end — is an append-only, hash-chained document in a local [NEDB](https://github.com/Eth-Interchained/nedb) store, so *what happened on my stream* is a question you can answer with proof instead of a screenshot.
 
-**Lineage, stated plainly:** marquee is a fork of [UA Social Browser](https://github.com/aiassistsecure/ua-social-browser) and keeps its shell wholesale — per-workspace session isolation, UA profiles, live in-shell sign-in, and the human-approved publishing path. That is deliberate. A creator streams *and* posts, from the same identities, on the same machine. The Studio, the Terminal, Go Live and the receipts are what marquee adds on top.
+**Lineage, stated plainly:** marquee is a fork of [UA Social Browser](https://github.com/aiassistsecure/ua-social-browser) and keeps its shell wholesale — per-workspace session isolation, UA profiles, live in-shell sign-in, and the human-approved publishing path. That is deliberate. A creator streams *and* posts, from the same identities, on the same machine. The Studio, recording, the Terminal, Go Live and the receipts are what marquee adds on top.
 
 ## What's in it
 
 | | |
 | --- | --- |
 | **Studio** | Screen or game capture through the shell's own source picker, your camera in a draggable corner (rect / rounded / circle, mirrored), a WebAudio mixer with live meters. One canvas — it is the preview *and* the broadcast; there is no second render path to disagree with what you see. |
+| **Record** | The primary act. The canvas plus the mix goes to disk in your Videos folder, one chunk per second — nothing is buffered in the page, so an hour-long take costs the renderer nothing and a crash costs the tail, not the take. Then the bundled Python finalises it to a real **MP4** by *copying* the H.264 stream: no second generation of loss, ~24x realtime. Chromium will hand you the right codec or the right container but never both, so marquee records H.264/opus Matroska and remuxes — and a take is never deleted, not on abort, not on a failed finalise. |
 | **Go Live** | The canvas plus the mix leaves as **one** WebRTC stream over WHIP to a [mediamtx](https://github.com/bluenviron/mediamtx) you run. That server serves HLS/WebRTC viewers and fans out to Twitch / YouTube / Kick with one ffmpeg tee. Your machine uploads once. |
 | **Terminal** | A real PTY — colours, cursor, `vim`, `htop` — served by the Python bundled inside the app. Shell, a Python REPL, or Node. No native Node addon, so no rebuild-per-Electron-version ladder. |
 | **Receipts** | Every on-air event is a document chained to what caused it. `trace` walks the causes and the effects; the store's Merkle head and `verify()` come back with every write. Scenes are versioned documents. |
@@ -124,7 +125,7 @@ Single-tenant — one person, one machine — with a tenant key on every documen
 
 ## Honest status
 
-**Verified on real systems:** the shell boots and runs headless end to end (Jenny spawns the Python runtime, health goes green, a real PTY answers through the cookie-gated proxy, a Python REPL evaluates, the Studio composites at 60 fps, `desktopCapturer` enumerates displays). WHIP publish against a real mediamtx: `201` + SDP answer, ICE connected, session publishing, `DELETE` tears it down. RTMP fan-out end to end: publish → tee → a second live path serving a real HLS playlist with real segments. The X publishing adapter posted for real from the macOS shell on 2026-09-02.
+**Verified on real systems:** the shell boots and runs headless end to end (Jenny spawns the Python runtime, health goes green, a real PTY answers through the cookie-gated proxy, a Python REPL evaluates, the Studio composites at 60 fps, `desktopCapturer` enumerates displays). Recording end to end from the live compositor: a 1920x1080 take written to `~/Videos/marquee`, finalised through the runtime, and confirmed with **ffprobe** (not the library that wrote it) as `QuickTime / MOV`, `h264`, 4.957 s, 149 frames, 30.06 fps average, full decode pass with zero errors. WHIP publish against a real mediamtx: `201` + SDP answer, ICE connected, session publishing, `DELETE` tears it down. RTMP fan-out end to end: publish → tee → a second live path serving a real HLS playlist with real segments. The X publishing adapter posted for real from the macOS shell on 2026-09-02.
 
 **Not verified yet:** a browser WHIP publish to a public VPS (real frames from the Studio to real viewers), macOS and Windows shell behaviour for the new sections, `pywinpty` for a Windows PTY, and packaging the Python bundle into the installers. The composer selectors for LinkedIn, Facebook, Threads, Bluesky, Mastodon and Tumblr are written from how those products work and have not each had a real post yet — when a selector drifts the attempt fails loudly rather than reporting a post that did not happen.
 
