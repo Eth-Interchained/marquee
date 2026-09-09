@@ -44,12 +44,15 @@ import {
 import { viewerUrls, WhipPublisher, type WhipState } from '@/lib/studio/whip.ts';
 import { Input } from '@/components/ui/input';
 import {
+  box16x9,
   bringToFront,
+  canvasForSource,
   defaultScene,
   hitHandle,
   hitTest,
   moveRect,
   resizeRect,
+  resizeScene,
   toNormalised,
   updateLayer,
   type Handle,
@@ -75,13 +78,24 @@ type Drag =
 
 type Notice = { level: 'info' | 'warn' | 'error'; text: string; raw?: string; at: number };
 
-const CORNER = { w: 0.24, h: 0.24 * (16 / 9) * (1080 / 1920) };
-const CORNERS: Array<{ label: string; rect: Layer['rect'] }> = [
-  { label: '↘', rect: { x: 0.735, y: 0.69, ...CORNER } },
-  { label: '↙', rect: { x: 0.025, y: 0.69, ...CORNER } },
-  { label: '↗', rect: { x: 0.735, y: 0.04, ...CORNER } },
-  { label: '↖', rect: { x: 0.025, y: 0.04, ...CORNER } },
-];
+/**
+ * Corner presets for the camera, computed for the CURRENT canvas.
+ *
+ * These cannot be a module constant any more: the canvas now takes the shape
+ * of whatever display is being captured, and a normalised box only stays 16:9
+ * if its height is derived from the canvas aspect. Hardcoding the 1080p ratio
+ * would squash the camera on any display that is not 16:9.
+ */
+function cornersFor(width: number, height: number): Array<{ label: string; rect: Layer['rect'] }> {
+  const box = box16x9(0.24, width, height);
+  const bottom = 1 - box.h - 0.035;
+  return [
+    { label: '↘', rect: { x: 0.735, y: bottom, ...box } },
+    { label: '↙', rect: { x: 0.025, y: bottom, ...box } },
+    { label: '↗', rect: { x: 0.735, y: 0.04, ...box } },
+    { label: '↖', rect: { x: 0.025, y: 0.04, ...box } },
+  ];
+}
 
 export function StudioSection({ workspace }: SectionProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -220,15 +234,28 @@ export function StudioSection({ workspace }: SectionProps) {
       endpoint: whipEndpoint,
       auth: live.pass ? { kind: 'basic', user: live.user, pass: live.pass } : { kind: 'none' },
       maxVideoBitrate: 4_500_000,
+      // The canvas is the display's native size now, which can be well past
+      // what a viewer wants. The sender scales for the wire; the recording
+      // keeps every pixel.
+      maxWireWidth: 1920,
+      maxWireHeight: 1080,
       onState: setWhip,
     });
     publisherRef.current = publisher;
     try {
       await publisher.start(stream);
       notify('info', `Live. Viewers: ${viewer?.hls}`);
+      if (publisher.wireScale > 1) {
+        notify(
+          'info',
+          `Streaming at ${Math.round(scene.width / publisher.wireScale)}x${Math.round(scene.height / publisher.wireScale)} while recording stays ${scene.width}x${scene.height} — the sender scales for the wire, the file keeps its pixels.`,
+        );
+      }
       liveEventIdRef.current = await record('go_live', {
         host: live.base,
         path: live.path,
+        canvas: `${scene.width}x${scene.height}`,
+        wireScale: publisher.wireScale,
         endpoint: whipEndpoint,
         viewer: viewer?.hls ?? null,
         sources: Object.keys(streamsRef.current),
@@ -238,7 +265,7 @@ export function StudioSection({ workspace }: SectionProps) {
       publisherRef.current = null;
       notify('error', error instanceof Error ? error.message : String(error));
     }
-  }, [live, notify, outgoingStream, record, viewer, whipEndpoint]);
+  }, [live, notify, outgoingStream, record, scene.height, scene.width, viewer, whipEndpoint]);
 
   const endLive = useCallback(async () => {
     const p = publisherRef.current;
@@ -538,7 +565,34 @@ export function StudioSection({ workspace }: SectionProps) {
       streamsRef.current[layerId] = stream;
       compositorRef.current?.setSource(layerId, videoFor(stream));
       setSources((s) => ({ ...s, [layerId]: label }));
-      void record('source_added', { source: layerId, label, audio: stream.getAudioTracks().length > 0 });
+
+      // The SCREEN decides the canvas. Recording a 5K display onto a 1080p
+      // canvas throws away three quarters of its pixels before the encoder
+      // ever sees them, and those are exactly the pixels a zoom would need.
+      // The camera does not get this vote: it is a corner box, not the frame.
+      let captured: { width: number; height: number } | null = null;
+      if (layerId === 'screen') {
+        const settings = stream.getVideoTracks()[0]?.getSettings?.() ?? {};
+        if (settings.width && settings.height) {
+          captured = canvasForSource(settings.width, settings.height);
+          setScene((current) => resizeScene(current, captured!.width, captured!.height));
+          if (captured.width !== settings.width || captured.height !== settings.height) {
+            notify(
+              'info',
+              `Recording at ${captured.width}x${captured.height} — scaled from this display's ${settings.width}x${settings.height} to stay inside the 4K compositing budget.`,
+            );
+          }
+        }
+      }
+
+      void record('source_added', {
+        source: layerId,
+        label,
+        audio: stream.getAudioTracks().length > 0,
+        sourceWidth: stream.getVideoTracks()[0]?.getSettings?.().width ?? null,
+        sourceHeight: stream.getVideoTracks()[0]?.getSettings?.().height ?? null,
+        canvas: captured ? `${captured.width}x${captured.height}` : null,
+      });
       stream.getVideoTracks()[0]?.addEventListener('ended', () => {
         compositorRef.current?.setSource(layerId, null);
         delete streamsRef.current[layerId];
@@ -753,6 +807,7 @@ export function StudioSection({ workspace }: SectionProps) {
   };
 
   const channels = mixerRef.current?.list() ?? [];
+  const corners = useMemo(() => cornersFor(scene.width, scene.height), [scene.width, scene.height]);
 
   return (
     <SectionShell
@@ -930,7 +985,7 @@ export function StudioSection({ workspace }: SectionProps) {
                     <Switch id="mirror" checked={selectedLayer.mirror} onCheckedChange={(v) => setLayer({ mirror: v })} />
                   </div>
                   <div className="flex gap-1.5">
-                    {CORNERS.map((c) => (
+                    {corners.map((c) => (
                       <Button key={c.label} size="sm" variant="outline" className="flex-1 px-0" onClick={() => setLayer({ rect: c.rect })}>
                         {c.label}
                       </Button>
