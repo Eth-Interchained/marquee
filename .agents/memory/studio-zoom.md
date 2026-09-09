@@ -157,3 +157,72 @@ request for an unknown shape came back as **500** with `HTTPException: 422`
 buried in the message, telling the caller a bad request was a server fault.
 Fixed by validating before the `try`, and both `/zoom` and `/remux` now carry
 an explicit `except HTTPException: raise` so the whole class cannot recur.
+
+## Captions — local, and why that is ours to do
+
+marquee already ships a Python runtime, so running speech recognition on the
+operator's own machine is a **dependency, not an architecture**. For an app
+without an embedded interpreter it is a rewrite. Nothing is uploaded, no
+account is needed, and a recording of something confidential stays on the disk
+it was recorded to.
+
+`faster-whisper` (CTranslate2), reading the take **directly through PyAV** —
+which the runtime already has — so there is no separate audio extraction and
+no temporary wav to leak or clean up.
+
+### Measured on real speech, not a tone
+
+A 10-second clip of real synthesised speech, muxed into the exact container
+MediaRecorder produces (H.264/opus Matroska):
+
+| Model | Accuracy | Speed |
+|---|---|---|
+| `tiny` | **word-perfect**, apostrophes included | **6.2x realtime** (CPU, int8) |
+| `base` | word-perfect | 3.5x realtime |
+
+A ten-minute take is therefore ~90 seconds — the same order as the zoom pass.
+Word-level timestamps work, which is what makes cue regrouping possible.
+
+### Weight, and why it is an optional extra
+
+| | |
+|---|---|
+| base runtime | 173MB |
+| with captions | 435MB |
+
+`onnxruntime` is **deliberately not installed**. faster-whisper wants it only
+for Silero voice-activity filtering, which is not used; dropping it (and sympy,
+which comes with it) saves **~173MB**, verified to leave transcription working
+unchanged. If anything ever wants `vad_filter=True` it has to add onnxruntime
+back and own that weight on purpose.
+
+So captions live in `requirements-captions.txt`, not `requirements.txt`. Without
+them the route answers **501** naming the command to enable it, `/health`
+reports `captions: null`, and the Studio hides the button — because an offer
+that answers 501 is worse than no offer.
+
+### Cue grouping, and the bug the tests caught
+
+Whisper's own segments are whatever the model felt like emitting, often a
+single 20-second sentence — as a caption, a wall of text that outstays its
+welcome. Cues are regrouped from WORD timings so they break at real pauses,
+after terminal punctuation, and never outlast ~5s.
+
+**The bug:** the character budget alone does not bound the line count. 84
+characters only fits two 42-character lines when the words happen to align, and
+greedy wrapping leaves slack — a test produced **three** lines from an
+84-character cue. Fixed by checking the actual wrap (`len(wrap_caption(...)) >
+max_lines`) rather than approximating it with a count. The real constraint is
+"two readable lines", so that is what is asserted.
+
+Other details that each cost a silent failure elsewhere:
+
+- **SRT wants a comma, WebVTT wants a period** in timestamps. Neither format
+  complains about the other's separator — the cues simply never appear.
+- **WebVTT's `WEBVTT` header is mandatory.** A file without it is rejected
+  outright by every browser, which also shows up as "captions do nothing".
+- An empty cue would be an extra separator in SRT and would corrupt every cue
+  after it, so a cue is never emitted with empty text.
+- A **silent take** produces empty caption files plus an explicit note. That is
+  a real outcome, not an error — but an empty file with no explanation looks
+  exactly like a broken transcription.
