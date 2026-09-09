@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  countZooms,
   RECORDING_FORMATS,
   RecordingSession,
   finaliseToMp4,
@@ -398,4 +399,32 @@ test('finaliseToMp4 surfaces the runtime\'s own words on every failure shape', a
   await assert.rejects(finaliseToMp4('/x.mkv', reply(404, JSON.stringify({ detail: 'no recording at /x.mkv' }))), /no recording at/);
   // A non-JSON body (a proxy error page) still reaches the operator raw.
   await assert.rejects(finaliseToMp4('/x.mkv', reply(502, '<html>bad gateway</html>')), /bad gateway/);
+});
+
+// ---------------------------------------------------------------- zoom counts
+
+test('countZooms counts moves, not keyframes', () => {
+  const kf = (tMs: number, scale: number) => ({ tMs, x: 0.5, y: 0.5, scale });
+
+  // One zoom is FOUR keyframes: wide, tight, tight, wide. Counting keyframes
+  // would tell the operator there were four zooms in a single move.
+  const oneMove = [kf(0, 1), kf(450, 0.5), kf(3300, 0.5), kf(3750, 1)];
+  assert.equal(countZooms(oneMove), 1);
+
+  // Two separate moves.
+  const twoMoves = [...oneMove, kf(6000, 1), kf(6450, 0.5), kf(9000, 0.5), kf(9450, 1)];
+  assert.equal(countZooms(twoMoves), 2);
+
+  // A plan that never leaves wide has no zooms.
+  assert.equal(countZooms([kf(0, 1)]), 0);
+  assert.equal(countZooms([]), 0);
+
+  // A plan that opens already tight still counts as one.
+  assert.equal(countZooms([kf(0, 0.5), kf(2000, 1)]), 1);
+
+  // Scales fractionally under 1 from float arithmetic are still "wide", or
+  // every eased keyframe would register as its own zoom.
+  assert.equal(countZooms([kf(0, 1), kf(100, 0.9999), kf(200, 1)]), 0);
+  // But a real, visible zoom just past the threshold counts.
+  assert.equal(countZooms([kf(0, 1), kf(100, 0.95), kf(200, 1)]), 1);
 });

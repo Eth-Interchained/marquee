@@ -303,7 +303,7 @@ export const ListStudioEventsResponse = zod.object({
   "events": zod.array(zod.object({
   "id": zod.string(),
   "workspaceId": zod.string(),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date(),
   "payload": zod.record(zod.string(), zod.unknown()),
   "causedBy": zod.array(zod.string()),
@@ -328,9 +328,9 @@ export const recordStudioEventBodyCausedByMax = 16;
 
 export const RecordStudioEventBody = zod.object({
   "workspaceId": zod.string().min(1),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date().optional().describe('When it happened on the operator\'s clock. Defaults to now.'),
-  "payload": zod.record(zod.string(), zod.unknown()).optional().describe('Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added, the file path and byte count for recording_stopped, the codecs and whether the video was stream-copied for recording_finalised. Never a credential.'),
+  "payload": zod.record(zod.string(), zod.unknown()).optional().describe('Kind-specific detail — the ingest endpoint and path for go_live, the exit reason for stream_ended, the source label for source_added, the file path and byte count for recording_stopped, the codecs and whether the video was stream-copied for recording_finalised, the keyframe count and render time for recording_zoomed. Never a credential.'),
   "causedBy": zod.array(zod.string()).max(recordStudioEventBodyCausedByMax).optional().describe('Ids of earlier events this one follows from.')
 })
 
@@ -338,7 +338,7 @@ export const RecordStudioEventResponse = zod.object({
   "event": zod.object({
   "id": zod.string(),
   "workspaceId": zod.string(),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date(),
   "payload": zod.record(zod.string(), zod.unknown()),
   "causedBy": zod.array(zod.string()),
@@ -363,7 +363,7 @@ export const TraceStudioEventResponse = zod.object({
   "event": zod.object({
   "id": zod.string(),
   "workspaceId": zod.string(),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date(),
   "payload": zod.record(zod.string(), zod.unknown()),
   "causedBy": zod.array(zod.string()),
@@ -372,7 +372,7 @@ export const TraceStudioEventResponse = zod.object({
   "causes": zod.array(zod.object({
   "id": zod.string(),
   "workspaceId": zod.string(),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date(),
   "payload": zod.record(zod.string(), zod.unknown()),
   "causedBy": zod.array(zod.string()),
@@ -381,7 +381,7 @@ export const TraceStudioEventResponse = zod.object({
   "effects": zod.array(zod.object({
   "id": zod.string(),
   "workspaceId": zod.string(),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date(),
   "payload": zod.record(zod.string(), zod.unknown()),
   "causedBy": zod.array(zod.string()),
@@ -428,7 +428,7 @@ export const SaveStudioSceneResponse = zod.object({
   "event": zod.object({
   "id": zod.string(),
   "workspaceId": zod.string(),
-  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
+  "kind": zod.enum(['go_live', 'stream_ended', 'scene_saved', 'source_added', 'source_removed', 'stream_error', 'recording_started', 'recording_stopped', 'recording_finalised', 'recording_zoomed', 'recording_error']).describe('What happened on air. A closed list; unknown kinds are rejected.'),
   "at": zod.coerce.date(),
   "payload": zod.record(zod.string(), zod.unknown()),
   "causedBy": zod.array(zod.string()),

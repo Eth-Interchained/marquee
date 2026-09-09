@@ -115,7 +115,7 @@ desktop/
   shell/               Electron shell: the actual browser, the only publisher, and the runtime host
     vendor/jenny/      Jenny's Python orchestrator, copied VERBATIM (sha256 pinned) — never edit
     vendor/keystone-lite/  shell-path.ts, verbatim: real user PATH for a GUI-launched app
-  py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY), /remux (recording -> MP4)
+  py-runtime/          The bundled Python: /health, token-gated /run_code, /ws/pty (a real PTY), /remux (recording -> MP4), /zoom (follow-cursor edit)
 deploy/
   mediamtx/            Go Live ingest config (WHIP in → HLS/WebRTC out; RTMP fan-out commented)
 lib/
@@ -138,6 +138,7 @@ lib/
 | `src/python-runtime.ts` | Starts the bundled Python through Jenny's verbatim orchestrator; mints nothing itself, wraps the token env-window and the real-PATH fix around it (see `.agents/memory/python-runtime.md`) |
 | `src/capture.ts` | Studio screen capture: lists `desktopCapturer` sources for the UI's picker and answers `getDisplayMedia()` on the default session with the ONE source the UI armed — never a guess (see `.agents/memory/studio-capture.md`) |
 | `src/permissions.ts` | OS camera/mic/screen gates: reads status, requests what the OS will actually prompt for (never screen — macOS has no API), and deep-links the rest into Settings (see `.agents/memory/os-permissions.md`) |
+| `src/cursor-track.ts` | The cursor's path during a take, sampled from the main process at 60Hz and written beside the recording — the renderer cannot see the global cursor at all. Feeds the zoom pass (see `.agents/memory/studio-zoom.md`) |
 | `src/recorder.ts` | Recording to disk: appends one MediaRecorder chunk per timeslice to a file in `~/Videos/marquee`, opens the fd synchronously so an unwritable path fails at the button, and NEVER deletes a take — a partial file is kept and its path reported (see `.agents/memory/studio-recording.md`) |
 | `src/session-bridge-server.ts` | Loopback HTTP the API server calls; token-gated |
 | `src/publisher/index.ts` | `sessionStatus`, `publish`, `beginSignIn` |

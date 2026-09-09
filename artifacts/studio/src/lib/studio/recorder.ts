@@ -379,3 +379,96 @@ export async function finaliseToMp4(
   }
   return JSON.parse(text) as FinaliseResult;
 }
+
+
+/**
+ * The zoomed edit: a second pass that crops toward wherever the cursor
+ * settled, rendered by the bundled Python.
+ *
+ * This is a re-encode, not a remux — a zoom is a different pixel for every
+ * pixel, so there is no stream copy to be had. Measured at roughly 2.5x
+ * realtime, which is why the plan can be fetched separately: the UI can say
+ * how many zooms were found, instantly, before anyone commits minutes to an
+ * encode.
+ */
+export type ZoomKeyframe = { tMs: number; x: number; y: number; scale: number };
+
+export type ZoomPlanResult = {
+  cursorTrack: string;
+  display: { x: number; y: number; width: number; height: number };
+  samples: number;
+  durationMs: number;
+  keyframes: ZoomKeyframe[];
+  notes: string[];
+};
+
+export type ZoomRenderResult = {
+  source: string;
+  output: string;
+  cursorTrack: string;
+  outputBytes: number;
+  width: number;
+  height: number;
+  frames: number;
+  keyframes: number;
+  durationSeconds: number | null;
+  tookSeconds: number;
+  notes: string[];
+};
+
+/** How many actual zooms a plan contains. Pure; tested. */
+export function countZooms(keyframes: ZoomKeyframe[]): number {
+  // A zoom is a transition INTO a scale below 1. Counting keyframes would
+  // report four for a single move, which reads as four zooms in the UI.
+  let zooms = 0;
+  let wide = true;
+  for (const frame of keyframes) {
+    const tight = frame.scale < 0.999;
+    if (tight && wide) zooms += 1;
+    wide = !tight;
+  }
+  return zooms;
+}
+
+async function runtimePost<T>(path: string, body: unknown, fetchImpl: typeof fetch = fetch): Promise<T> {
+  const response = await fetchImpl(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    // The runtime's `detail` is written for the operator; pass it through
+    // rather than replacing it with a guess about what went wrong.
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // Not JSON — a proxy error page. The raw body beats a claim about it.
+    }
+    throw new Error(
+      response.status === 501
+        ? `This build cannot render a zoomed edit: ${detail}`
+        : `${path} failed (HTTP ${response.status}): ${detail}`,
+    );
+  }
+  return JSON.parse(text) as T;
+}
+
+export function fetchZoomPlan(
+  source: string,
+  cursorTrack: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ZoomPlanResult> {
+  return runtimePost<ZoomPlanResult>('/runtime/zoom/plan', { source, cursorTrack }, fetchImpl);
+}
+
+export function renderZoomedEdit(
+  source: string,
+  cursorTrack: string,
+  options: { outWidth?: number; outHeight?: number; zoomScale?: number } = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<ZoomRenderResult> {
+  return runtimePost<ZoomRenderResult>('/runtime/zoom', { source, cursorTrack, ...options }, fetchImpl);
+}
