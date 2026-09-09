@@ -73,6 +73,32 @@ export type MarqueeShellBridge = {
     /** Arms the shell's display-media handler for the NEXT getDisplayMedia(). `null` disarms. */
     selectCaptureSource(selection: ShellCaptureSelection | null): Promise<void>;
   };
+  /** OS capture permissions. Absent on older shells. */
+  permissions?: {
+    status(): Promise<ShellPermissionState[]>;
+    /**
+     * Asks the OS where it has an API. Screen recording on macOS has none, so
+     * this returns the unchanged state — read `canRequest` first and use
+     * `openSettings` instead of waiting for a prompt.
+     */
+    request(kind: ShellPermissionKind): Promise<ShellPermissionState>;
+    openSettings(kind: ShellPermissionKind): Promise<{ opened: boolean; detail: string }>;
+  };
+};
+
+export type ShellPermissionKind = 'camera' | 'microphone' | 'screen';
+
+/** Mirrors `PermissionState` in the shell's permissions.ts. */
+export type ShellPermissionState = {
+  kind: ShellPermissionKind;
+  status: 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown' | 'not-applicable';
+  /** True when the OS will show its own prompt if asked. False for screen on every platform. */
+  canRequest: boolean;
+  settingsUrl: string | null;
+  /** True when a grant only takes effect after marquee restarts (macOS screen recording). */
+  needsRestart: boolean;
+  /** The sentence to show. Comes from the shell so the copy is asserted by its tests. */
+  detail: string;
 };
 
 declare global {

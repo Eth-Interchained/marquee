@@ -13,6 +13,8 @@ import {
   CHANNELS,
   type CaptureSelection,
   type CaptureSource,
+  type PermissionKind,
+  type PermissionState,
   type Rect,
   type SurfaceAttachResult,
   type SurfaceOptions,
@@ -36,6 +38,11 @@ const host = {
   captureSources: (): Promise<CaptureSource[]> => ipcRenderer.invoke(CHANNELS.captureSources),
   captureSelect: (selection: CaptureSelection | null): Promise<void> =>
     ipcRenderer.invoke(CHANNELS.captureSelect, { selection }),
+  permissionsStatus: (): Promise<PermissionState[]> => ipcRenderer.invoke(CHANNELS.permissionsStatus),
+  permissionsRequest: (kind: PermissionKind): Promise<PermissionState> =>
+    ipcRenderer.invoke(CHANNELS.permissionsRequest, { kind }),
+  permissionsOpenSettings: (kind: PermissionKind): Promise<{ opened: boolean; detail: string }> =>
+    ipcRenderer.invoke(CHANNELS.permissionsOpenSettings, { kind }),
 };
 
 contextBridge.exposeInMainWorld("__marqueeShellHost", host);

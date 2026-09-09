@@ -140,6 +140,7 @@ scripts/               template leftover
 | `src/ui-server.ts`, `src/preload/` | The privileged loopback origin and its gate; also proxies `/runtime/*` (HTTP + WebSocket upgrades) to the Python runtime, adding its token |
 | `src/python-runtime.ts` | Starts the bundled Python through Jenny's verbatim orchestrator; mints nothing itself, wraps the token env-window and the real-PATH fix around it (see `.agents/memory/python-runtime.md`) |
 | `src/capture.ts` | Studio screen capture: lists `desktopCapturer` sources for the UI's picker and answers `getDisplayMedia()` on the default session with the ONE source the UI armed — never a guess (see `.agents/memory/studio-capture.md`) |
+| `src/permissions.ts` | OS camera/mic/screen gates: reads status, requests what the OS will actually prompt for (never screen — macOS has no API), and deep-links the rest into Settings (see `.agents/memory/os-permissions.md`) |
 | `src/session-bridge-server.ts` | Loopback HTTP the API server calls; token-gated |
 | `src/publisher/index.ts` | `sessionStatus`, `publish`, `beginSignIn` |
 | `src/publisher/adapters.ts` | Per-network cookies, composer config, sign-in URL, refusal reasons |

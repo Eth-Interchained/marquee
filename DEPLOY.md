@@ -338,16 +338,45 @@ terminal — the operator signs in and the same approved draft goes out.
 
 The Studio sends ONE WebRTC stream (WHIP) to a mediamtx you run; mediamtx serves
 viewers (HLS on :8888, WebRTC/WHEP on :8889) and, when enabled, fans out to
-RTMP destinations. Single Go binary, no root, no /etc footprint — run it in a
-tmux session from your home directory like nedbd:
+RTMP destinations. Single Go binary, no root, no /etc footprint.
+
+**One command, on the VPS:**
+
+```bash
+git clone https://github.com/Eth-Interchained/marquee.git
+cd marquee/deploy/mediamtx && bash install.sh
+```
+
+It downloads the binary, writes `~/marquee-ingest/mediamtx.yml` with **your
+public IP** and a **generated publisher password**, creates
+`~/.config/marquee/fanout.env` (0600) for stream keys, starts it in a tmux
+session called `marquee-ingest`, **verifies it by reading its own API** (and
+refuses to claim success otherwise), and prints exactly what to type into the
+Studio. Re-running is safe — it keeps your password and your keys.
+
+Those two generated values are the ones that are wrong by default and fail
+*quietly*: an empty `webrtcAdditionalHosts` gives you a clean `201` and then an
+ICE timeout, which reads like a broken server rather than a server that never
+said where it was.
+
+Two things the script cannot do for you, and says so at the end:
+
+- **open the firewall** — TCP 8889 (WHIP/WHEP), TCP 8888 (HLS), **UDP 8189 (ICE media)**
+- **point `live.ne-db.com` at the VPS on a GREY-CLOUD record** — WebRTC media
+  cannot ride Cloudflare's proxy; orange cloud gives you a clean handshake and
+  then silence.
+
+<details><summary>By hand, if you prefer</summary>
 
 ```bash
 curl -sSL -o mediamtx.tgz https://github.com/bluenviron/mediamtx/releases/download/v1.21.0/mediamtx_v1.21.0_linux_amd64.tar.gz
 tar xzf mediamtx.tgz
 cp <checkout>/deploy/mediamtx/mediamtx.yml .
 # EDIT: authInternalUsers → marquee password; webrtcAdditionalHosts → ['<VPS public IP>']
+#       and the absolute fanout.py path in runOnAvailable
 ./mediamtx ./mediamtx.yml
 ```
+</details>
 
 In the Studio: Ingest host `https://<grey-cloud-host-or-ip>`, path `marquee/<you>`,
 user `marquee`, the password from the yml. The Studio sends **Basic** auth —

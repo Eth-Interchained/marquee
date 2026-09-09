@@ -24,6 +24,7 @@ import { startSessionBridge, type SessionBridgeHandle } from "./session-bridge-s
 import { startWorkspaceUiServer, SHELL_COOKIE_NAME, type UiServerHandle } from "./ui-server";
 import { startPythonRuntime, type PythonRuntimeHandle } from "./python-runtime";
 import { CaptureBroker } from "./capture";
+import { allPermissions, openPermissionSettings, requestPermission } from "./permissions";
 import {
   reclaimOrphanedApiServer,
   startApiServer,
@@ -38,6 +39,7 @@ import {
   CHANNELS,
   type CaptureSelection,
   type ChromeCommand,
+  type PermissionKind,
   type Rect,
   type ShellSessionStatus,
   type SurfaceOptions,
@@ -376,6 +378,29 @@ function registerBridgeIpc(
   ipcMain.handle(CHANNELS.captureSources, async (event) => {
     privileged(event);
     return capture.listSources();
+  });
+
+  ipcMain.handle(CHANNELS.permissionsStatus, (event) => {
+    privileged(event);
+    return allPermissions();
+  });
+
+  ipcMain.handle(CHANNELS.permissionsRequest, async (event, payload: { kind: PermissionKind }) => {
+    privileged(event);
+    const kind = payload?.kind;
+    if (kind !== "camera" && kind !== "microphone" && kind !== "screen") {
+      throw new Error(`permissionsRequest: unknown kind ${String(kind)}`);
+    }
+    return requestPermission(kind);
+  });
+
+  ipcMain.handle(CHANNELS.permissionsOpenSettings, async (event, payload: { kind: PermissionKind }) => {
+    privileged(event);
+    const kind = payload?.kind;
+    if (kind !== "camera" && kind !== "microphone" && kind !== "screen") {
+      throw new Error(`permissionsOpenSettings: unknown kind ${String(kind)}`);
+    }
+    return openPermissionSettings(kind);
   });
 
   ipcMain.handle(CHANNELS.captureSelect, (event, payload: { selection: CaptureSelection | null }) => {

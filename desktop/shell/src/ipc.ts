@@ -23,7 +23,23 @@ export const CHANNELS = {
   captureSources: "marquee:capture:sources",
   /** Studio: choose which one the NEXT getDisplayMedia() call receives. */
   captureSelect: "marquee:capture:select",
+  /** OS capture permissions: read, request (where possible), open Settings. */
+  permissionsStatus: "marquee:permissions:status",
+  permissionsRequest: "marquee:permissions:request",
+  permissionsOpenSettings: "marquee:permissions:open-settings",
 } as const;
+
+/** Mirrors `PermissionKind` / `PermissionState` in permissions.ts. */
+export type PermissionKind = "camera" | "microphone" | "screen";
+
+export type PermissionState = {
+  kind: PermissionKind;
+  status: "not-determined" | "granted" | "denied" | "restricted" | "unknown" | "not-applicable";
+  canRequest: boolean;
+  settingsUrl: string | null;
+  needsRestart: boolean;
+  detail: string;
+};
 
 /**
  * A screen or window offered to the Studio's picker. `id` is Electron's

@@ -27,6 +27,7 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { getShell, type ShellCaptureSource } from '@/lib/shell-bridge';
+import { PermissionDialog, usePermissions } from '@/components/app/permission-gate';
 import { Mixer } from '@/lib/studio/audio.ts';
 import { captureCamera, captureMic, captureScreen, stopStream, videoFor, type CaptureError } from '@/lib/studio/capture.ts';
 import { Compositor } from '@/lib/studio/compositor.ts';
@@ -158,18 +159,18 @@ export function StudioSection({ workspace }: SectionProps) {
   // Go Live — one WHIP upstream to mediamtx. Settings persist per browser so
   // the operator does not retype the ingest host every session. The password
   // is kept in sessionStorage only: it leaves with the tab.
-  const LIVE_KEY = 'ua-studio-live';
+  const LIVE_KEY = 'marquee-studio-live';
   const [live, setLive] = useState<{ base: string; path: string; user: string; pass: string }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(LIVE_KEY) ?? '{}') as Partial<{ base: string; path: string; user: string }>;
       return {
-        base: saved.base ?? '',
+        base: saved.base ?? 'https://live.ne-db.com',
         path: saved.path ?? `marquee/${workspace.accountHandle || 'me'}`.replace(/^@/, ''),
         user: saved.user ?? 'marquee',
         pass: sessionStorage.getItem(`${LIVE_KEY}:pass`) ?? '',
       };
     } catch {
-      return { base: '', path: 'marquee/me', user: 'marquee', pass: '' };
+      return { base: 'https://live.ne-db.com', path: 'marquee/me', user: 'marquee', pass: '' };
     }
   });
   const [whip, setWhip] = useState<WhipState>({ kind: 'idle' });
@@ -239,6 +240,20 @@ export function StudioSection({ workspace }: SectionProps) {
 
   const shell = getShell();
   const shellPicker = Boolean(shell?.studio);
+
+  // OS permissions. Not a wall on load — raised only when the OS actually
+  // gets in the way, because that is the moment it explains something.
+  const perms = usePermissions();
+  const [permDialog, setPermDialog] = useState<{ open: boolean; reason: string | null }>({ open: false, reason: null });
+  const raisePermissions = useCallback(
+    (reason: string) => {
+      if (!perms.supported) return false;
+      if (perms.blocking.length === 0) return false;
+      setPermDialog({ open: true, reason });
+      return true;
+    },
+    [perms],
+  );
 
   // A stream that drops while live is an event too — chained to its go_live.
   useEffect(() => {
@@ -350,11 +365,23 @@ export function StudioSection({ workspace }: SectionProps) {
     setPicker({ open: true, loading: true, sources: [], error: null });
     try {
       const list = await shell.studio.listCaptureSources();
+      // An empty list on macOS is almost always Screen Recording being off —
+      // the OS reports no sources rather than refusing. Say which, instead of
+      // leaving the operator staring at an empty grid.
+      if (list.length === 0) {
+        await perms.refresh();
+        const screen = perms.states?.find((s) => s.kind === 'screen');
+        if (screen && screen.status !== 'granted' && screen.status !== 'not-applicable') {
+          setPicker({ open: false, loading: false, sources: [], error: null });
+          setPermDialog({ open: true, reason: 'The system reported no capturable screens, which is what it does when Screen Recording is switched off for marquee.' });
+          return;
+        }
+      }
       setPicker({ open: true, loading: false, sources: list, error: null });
     } catch (error) {
       setPicker({ open: true, loading: false, sources: [], error: error instanceof Error ? error.message : String(error) });
     }
-  }, [runScreenCapture, shell]);
+  }, [perms, runScreenCapture, shell]);
 
   const pickSource = useCallback(
     async (source: ShellCaptureSource) => {
@@ -377,9 +404,11 @@ export function StudioSection({ workspace }: SectionProps) {
       attachStream('camera', cap.stream, cap.label);
     } catch (error) {
       const e = error as CaptureError;
+      // A `denied` from the browser inside the shell is usually the OS, not us.
+      if (e.code === 'denied' && raisePermissions('The camera was refused. That refusal comes from the operating system, not from marquee.')) return;
       notify('error', e.message ?? String(error), e.raw);
     }
-  }, [attachStream, notify]);
+  }, [attachStream, notify, raisePermissions]);
 
   const addMic = useCallback(async () => {
     try {
@@ -393,9 +422,10 @@ export function StudioSection({ workspace }: SectionProps) {
       setSources((s) => ({ ...s, mic: cap.label }));
     } catch (error) {
       const e = error as CaptureError;
+      if (e.code === 'denied' && raisePermissions('The microphone was refused. That refusal comes from the operating system, not from marquee.')) return;
       notify('error', e.message ?? String(error), e.raw);
     }
-  }, [ensureMixer, notify]);
+  }, [ensureMixer, notify, raisePermissions]);
 
   const removeSource = useCallback(
     (id: string) => {
@@ -777,6 +807,14 @@ export function StudioSection({ workspace }: SectionProps) {
           ) : null}
         </div>
       </div>
+
+      <PermissionDialog
+        open={permDialog.open}
+        onOpenChange={(open) => setPermDialog((p) => ({ ...p, open }))}
+        states={perms.blocking.length > 0 ? perms.blocking : (perms.states ?? [])}
+        onChanged={() => void perms.refresh()}
+        reason={permDialog.reason}
+      />
 
       {/* The shell's source picker — thumbnails of what the OS reports right now. */}
       <Dialog open={picker.open} onOpenChange={(open) => setPicker((p) => ({ ...p, open }))}>

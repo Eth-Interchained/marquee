@@ -85,6 +85,18 @@ export function installUaShellMainWorld(): boolean {
       listCaptureSources: () => host.captureSources(),
       selectCaptureSource: (selection: any) => host.captureSelect(selection),
     },
+
+    /**
+     * OS capture permissions. `request` only does something where the OS has
+     * an API for it — screen recording on macOS does not, so the UI reads
+     * `canRequest` and `settingsUrl` and shows a button instead of waiting for
+     * a prompt that never comes.
+     */
+    permissions: {
+      status: () => host.permissionsStatus(),
+      request: (kind: any) => host.permissionsRequest(kind),
+      openSettings: (kind: any) => host.permissionsOpenSettings(kind),
+    },
   };
 
   Object.freeze(marqueeShell);
