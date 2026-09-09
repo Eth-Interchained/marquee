@@ -13,11 +13,68 @@ not the shipped product, and it deliberately cannot post to any network — see
 
 ---
 
+## First test run, start to finish
+
+Verified from a **clean clone** on 2026-09-09 (Linux, headless): every command
+below in order, then the app boots with the Terminal live and the Studio
+compositing.
+
+```bash
+git clone https://github.com/Eth-Interchained/marquee.git && cd marquee
+pnpm install
+pnpm --filter @marquee/api-spec run codegen
+pnpm run typecheck
+
+# the bundled Python — the Terminal. Once per checkout.
+(cd desktop/py-runtime && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
+
+# the two halves the shell hosts
+PORT=5173 BASE_PATH=/ pnpm --filter @marquee/studio run build
+pnpm --filter @marquee/api-server run build
+
+pnpm --filter @marquee/shell run start
+```
+
+**The first `start` is slow and looks stuck — it is downloading Electron
+(~282 MB).** `pnpm`'s `onlyBuiltDependencies` allowlist in
+`pnpm-workspace.yaml` does not include `electron`, so its postinstall never
+runs and the binary is fetched lazily on first use instead. It self-heals;
+subsequent launches are immediate. If you would rather pay that cost during
+`pnpm install`, add `electron` to that allowlist.
+
+What you should see, in order:
+
+1. Shell log: `API server ready` → `Python runtime healthy` → `Shell ready`,
+   with **zero** `"level":"error"` lines.
+2. **Terminal** → badge reads `runtime · py 3.x · gated`. If it says
+   **UNGATED**, stop and report it — the capability token failed to reach the
+   child. A shell prompt opens by itself; `ls --color`, `htop` and `vim` should
+   all behave. Resize the window and the shell reflows.
+3. **+ Python** → a REPL; `6*7` → 42. **+ Node** → a `>` prompt.
+4. **Studio** → `1920×1080 · <n> fps`, a dark canvas with "Screen: no source"
+   and a rounded camera box bottom-right. Receipts shows a head and a green
+   shield.
+5. **Share screen / game** → *marquee's own* picker with thumbnails, not
+   Chrome's. On macOS the first attempt will likely show the permission dialog
+   instead — that is correct, see §5c.
+6. **Camera** → your face, mirrored, in the corner. Drag it; corner-resize
+   keeps 16:9; Shape → Circle stays round.
+7. **Microphone** → a channel with a moving meter.
+8. Everything you do appears in **Receipts** with a sequence number and a cause
+   count, and the head changes on every write.
+
+Going live additionally needs an ingest server — §5b, one command.
+
+---
+
 ## Running it, in one paragraph
 
 Run `pnpm install`, then `pnpm --filter @marquee/api-spec run codegen` to
 generate the client from the OpenAPI contract, and `pnpm run typecheck` to
-confirm the tree is sound. For the development surface, start the two services —
+confirm the tree is sound. Create the Python runtime's venv once
+(`cd desktop/py-runtime && python3 -m venv .venv && .venv/bin/pip install -r
+requirements.txt`) or the Terminal will report that it has nothing to connect
+to. For the development surface, start the two services —
 `pnpm --filter @marquee/api-server run dev` (builds and serves the API on
 `PORT`, mounted at `/api`) and `pnpm --filter @marquee/studio run
 dev` (the Vite dev server for the sidebar UI) — which is all you need for
@@ -434,6 +491,70 @@ ICE connected and the session reached `publish`; DELETE → 200 ends it. **With
 waiting connection") — that line is the one that matters. Real frames and HLS
 segments are proven only by a live publish from the Studio.
 
+## 5c. Capture permissions (macOS, and why there is no "Allow" button for one of them)
+
+The Studio raises a permissions dialog when the OS is in the way, and it can
+grant only some of them for you. That asymmetry is the OS's, not a design
+choice:
+
+| | Can marquee ask? | What the button does |
+| --- | --- | --- |
+| Camera | **Yes** — macOS shows its own prompt once | "Allow camera" |
+| Microphone | **Yes** | "Allow microphone" |
+| **Screen Recording** | **No. There is no API.** | "Open Settings" — deep-links to the Privacy pane |
+
+`systemPreferences.askForMediaAccess` accepts only `'microphone'` and
+`'camera'`. Screen recording cannot be requested by an application at all, so a
+"click to allow" button for it would leave you waiting for a prompt macOS will
+never show. Two consequences worth knowing before you test:
+
+- **A Screen Recording grant applies on the next launch.** Switch marquee on in
+  Settings, then quit and reopen it. The dialog says so.
+- **An empty source picker is almost always this permission.**
+  `desktopCapturer.getSources()` returns `[]` when Screen Recording is off — it
+  does not throw — so the Studio re-reads the status and shows the dialog with
+  that reason instead of an empty grid.
+
+Windows gates camera and microphone (with `ms-settings:` panes) and has no
+screen-capture gate. Linux gates none, and reports `not-applicable` rather than
+pretending.
+
+## 5d. Packaging (installers with Python inside)
+
+```bash
+pnpm --filter @marquee/shell run package
+```
+
+That runs `desktop/py-runtime/build.py --check` (PyInstaller `--onedir --name
+jenny`, then it **runs the bundle and reads `/health` back**, and confirms an
+untokened `/run_code` is still `401`), builds the shell, and calls
+electron-builder. `extraResources` ships the Python bundle, the built UI and
+the built API server into `resources/`, so an installed marquee needs no Python
+on the machine.
+
+Three things have to agree about one path — `build.py`'s `--name`,
+electron-builder's `extraResources.to`, and the **vendored** `findPythonExe`'s
+first candidate (`resources/python/jenny/jenny[.exe]`).
+`desktop/shell/test/packaging.test.ts` asserts all three, because a drift there
+starts fine and then loses the Terminal with an error about a path nobody typed.
+
+**Not yet done:** no installer has actually been built or signed. Code signing
+(the Certum cert under Interchained LLC) is not wired into this repo yet.
+
+## 5e. The Terminal on Windows
+
+`/ws/pty` uses ConPTY through `pywinpty`, which is platform-conditional in
+`desktop/py-runtime/requirements.txt` so a mac/Linux install never tries to
+build it.
+
+**That path has never been run on Windows.** It is written from pywinpty's
+documented API. It is wired rather than refused because it names what breaks
+instead of guessing: no pywinpty closes the socket with **4501** and the
+install hint, a failed spawn closes with **4502** and the exception text, and
+anything later arrives as an `{"type":"error"}` frame. Treat a working result
+as "someone ran it on Windows", never as tested. `/run_code` and `/health` work
+on every platform.
+
 ## 6. Scheduled dispatch
 
 An approved draft with a send time goes out on its own, without the app being
@@ -546,6 +667,13 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
 - [ ] `pnpm --filter @marquee/api-server run test` green — the scheduled
       dispatch suite, which needs no display either
 - [ ] `pnpm --filter @marquee/api-spec run codegen` re-run after any spec edit
+- [ ] `(cd desktop/py-runtime && .venv/bin/python -m unittest discover -s . -p 'test_*.py')` green
+- [ ] `pnpm --filter @marquee/shell run bundle:python` green — it builds the
+      PyInstaller bundle and then *runs* it, so a bundle that compiles but
+      cannot serve, or that loses its token gate, fails here rather than in an
+      installer
+- [ ] `node --test deploy/mediamtx/fanout.test.mjs` green (executes the real
+      fan-out script; asserts stream keys are never printed)
 - [ ] `AIASSIST_API_KEY` present in the target environment
 - [ ] `MARQUEE_SESSION_BRIDGE_URL` / `MARQUEE_SESSION_BRIDGE_TOKEN` unset on the web
       surface; on the desktop build, confirmed to be set by the shell rather
