@@ -92,7 +92,13 @@ export function installUaShellMainWorld(): boolean {
        * which is what makes an hour-long take possible at all.
        */
       recording: {
-        begin: (mimeType: string, label?: string) => host.recordingBegin(mimeType, label),
+        // `displayId` is how the shell knows WHICH display to sample the
+        // cursor against — Electron's own `display_id` from the capture source,
+        // NOT the number inside the source id, which is Chromium's media
+        // device id and does not match. Omit it and the take simply has no
+        // cursor track, reported as `cursorTrackPath: null`, never silently.
+        begin: (mimeType: string, label?: string, displayId?: string) =>
+          host.recordingBegin(mimeType, label, displayId),
         writeChunk: async (id: string, blob: any) => {
           if (!blob || typeof blob.arrayBuffer !== "function") {
             throw new TypeError("writeChunk needs the Blob from MediaRecorder's dataavailable event.");

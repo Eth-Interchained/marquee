@@ -54,6 +54,66 @@ export interface Scene {
 
 export const CANVAS_1080 = { width: 1920, height: 1080 } as const;
 
+/**
+ * The most pixels we will composite and record — 4K's worth.
+ *
+ * Not an arbitrary limit. The canvas is drawn every frame and then encoded by
+ * MediaRecorder in the same process, so the ceiling is what a machine can
+ * composite AND encode at 30fps without dropping frames. A 5K iMac's display
+ * is 14.7M pixels, nearly double this; recording it 1:1 costs more than the
+ * sharpness is worth. Scaling to fit this budget keeps the aspect ratio exact.
+ */
+export const RECORD_PIXEL_BUDGET = 3840 * 2160;
+
+/**
+ * Canvas size for a captured source, preserving its aspect ratio exactly.
+ * Pure; tested.
+ *
+ * Two rules that are not negotiable:
+ *
+ *  1. **Both dimensions must be even.** H.264 with 4:2:0 chroma subsampling
+ *     cannot represent an odd width or height — the encoder either refuses the
+ *     frame or silently pads it, and a padded frame is a green edge on one side
+ *     of every recording.
+ *  2. **The aspect ratio comes from the SOURCE, not from 16:9.** A 16:10
+ *     laptop display recorded onto a 16:9 canvas is letterboxed, and letterbox
+ *     bars burned into a file cannot be removed later.
+ */
+export function canvasForSource(sourceWidth: number, sourceHeight: number): { width: number; height: number } {
+  // A source that reports nothing usable still has to produce a valid canvas;
+  // 1080p is the honest fallback rather than a zero-sized surface.
+  if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) || sourceWidth < 2 || sourceHeight < 2) {
+    return { width: CANVAS_1080.width, height: CANVAS_1080.height };
+  }
+
+  let width = sourceWidth;
+  let height = sourceHeight;
+  const pixels = width * height;
+  if (pixels > RECORD_PIXEL_BUDGET) {
+    const scale = Math.sqrt(RECORD_PIXEL_BUDGET / pixels);
+    width = width * scale;
+    height = height * scale;
+  }
+
+  // Round DOWN to even so we never scale up past the source and never exceed
+  // the budget by rounding.
+  const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
+  return { width: even(width), height: even(height) };
+}
+
+/**
+ * Normalised rect for a box that should read as 16:9 *in pixels* on a canvas
+ * of any aspect ratio. Pure; tested.
+ *
+ * Normalised coordinates are relative to each axis independently, so a square
+ * normalised box is only square when the canvas is. Without this, moving from
+ * a 16:9 canvas to a 16:10 one silently stretches the camera.
+ */
+export function box16x9(normalisedWidth: number, canvasWidth: number, canvasHeight: number): { w: number; h: number } {
+  const aspect = canvasWidth / canvasHeight;
+  return { w: normalisedWidth, h: normalisedWidth * aspect * (9 / 16) };
+}
+
 /** The two things every gamer and creator needs on screen, out of the box. */
 export function defaultScene(): Scene {
   return {
@@ -77,12 +137,49 @@ export function defaultScene(): Scene {
         kind: "camera",
         name: "Camera",
         // bottom-right corner, 16:9 box at ~24% width
-        rect: { x: 0.735, y: 0.69, w: 0.24, h: 0.24 * (16 / 9) * (1080 / 1920) },
+        rect: {
+          x: 0.735,
+          y: 0.69,
+          ...box16x9(0.24, CANVAS_1080.width, CANVAS_1080.height),
+        },
         visible: true,
         shape: "rounded",
         mirror: true,
       },
     ],
+  };
+}
+
+/**
+ * Re-fit a scene onto a new canvas size, keeping every layer looking the way
+ * it looked. Pure; tested.
+ *
+ * Normalised rects are relative to each axis independently, so simply changing
+ * the canvas dimensions stretches everything when the ASPECT changes. This
+ * preserves each layer's pixel aspect ratio instead:
+ *
+ *   newH = h * (newWidth / oldWidth) * (oldHeight / newHeight)
+ *
+ * which collapses to `h` unchanged when the aspect is the same, however much
+ * the resolution grows.
+ *
+ * A layer that fills the canvas is the deliberate exception — it stays filling.
+ * Preserving the pixel aspect of a full-bleed screen layer would letterbox it,
+ * which is the opposite of what "fill" means.
+ */
+export function resizeScene(scene: Scene, width: number, height: number): Scene {
+  if (width === scene.width && height === scene.height) return scene;
+  const wRatio = width / scene.width;
+  const hRatio = scene.height / height;
+  return {
+    ...scene,
+    width,
+    height,
+    layers: scene.layers.map((layer) => {
+      const fills = layer.rect.w >= 1 && layer.rect.h >= 1;
+      if (fills) return layer;
+      return { ...layer, rect: clampRect({ ...layer.rect, h: layer.rect.h * wRatio * hRatio }) };
+    }),
   };
 }
 

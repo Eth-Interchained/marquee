@@ -46,6 +46,12 @@ export type ShellCaptureSource = {
   /** data: URL thumbnail. */
   thumbnail: string;
   appIcon: string | null;
+  /**
+   * Electron's display id for a screen source; null for a window. The ONLY
+   * reliable join to a physical display — the number inside `id` is Chromium's
+   * media device id and does not match. Absent on shells before bridge 1.2.0.
+   */
+  displayId?: string | null;
 };
 
 export type ShellCaptureSelection = {
@@ -60,6 +66,12 @@ export type ShellRecordingBegun = {
   /** The real path on disk. Shown to the operator — never guessed at here. */
   path: string;
   startedAt: string;
+  /**
+   * Where the cursor path is being written, or null when there was nothing to
+   * track against — a window capture, or no capture source named. The renderer
+   * cannot sample the global cursor itself, so this is the only route to it.
+   */
+  cursorTrackPath?: string | null;
 };
 
 /** Mirrors `RecordingClosed` in ipc.ts. */
@@ -71,11 +83,16 @@ export type ShellRecordingClosed = {
   chunks: number;
   /** False when the shell closed the take itself (quit mid-recording). */
   clean: boolean;
+  /** The cursor track that was written alongside, when there was one. */
+  cursor?: { path: string; samples: number; skipped: number; bytes: number } | null;
 };
 
 export type ShellRecording = {
-  /** Opens a file and returns its real path. */
-  begin(mimeType: string, label?: string): Promise<ShellRecordingBegun>;
+  /**
+   * Opens a file and returns its real path. Pass the captured source's
+   * `displayId` so the shell can sample the cursor against the right display.
+   */
+  begin(mimeType: string, label?: string, displayId?: string): Promise<ShellRecordingBegun>;
   /** Appends one MediaRecorder chunk. Pass the Blob; the bridge reads it. */
   writeChunk(id: string, blob: Blob): Promise<{ bytes: number; chunks: number }>;
   finish(id: string): Promise<ShellRecordingClosed>;
