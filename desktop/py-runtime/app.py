@@ -44,9 +44,10 @@ import sys
 import tempfile
 import termios
 import time
-from typing import Any, Optional
+from typing import Any, Optional, List
 
 import remux
+import zoom
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -186,6 +187,7 @@ async def health() -> dict[str, Any]:
         # The Studio needs to know BEFORE it offers to record whether this
         # runtime can finalise to MP4. None means PyAV is missing.
         "remux": remux.library_versions(),
+        "zoom": zoom.library_versions(),
     }
 
 
@@ -218,10 +220,125 @@ async def remux_recording(req: RemuxRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        # Never let the broad handler below re-wrap a deliberate status code as
+        # a 500. Verified the hard way: a 422 raised inside this block came back
+        # as "500 ... HTTPException: 422: ...", which tells a caller a bad
+        # request was a server fault.
+        raise
     except Exception as exc:  # a broken container, a full disk — name it, never swallow it
         log.exception("remux failed for %s", req.source)
         raise HTTPException(status_code=500, detail=f"remux failed: {type(exc).__name__}: {exc}")
     return result.as_dict()
+
+
+class ZoomRequest(BaseModel):
+    source: str = Field(min_length=1)
+    cursor_track: str = Field(min_length=1, alias="cursorTrack")
+    output: Optional[str] = None
+    # The DELIVERY size, not the source size. Cropping a 1920x1080 window out of
+    # a 4K capture is a 2x zoom at native sharpness; encoding 4K out would cost
+    # four times as much for pixels no viewer asked for.
+    out_width: int = Field(default=1920, ge=320, le=3840, alias="outWidth")
+    out_height: int = Field(default=1080, ge=240, le=2160, alias="outHeight")
+    # Delivery shapes by name. The FIRST is primary and gets the plain
+    # `.zoomed.mp4`; the rest carry their label. One decode feeds them all,
+    # because decoding is the expensive half.
+    targets: Optional[List[str]] = None
+    # How much of the frame a zoomed shot shows. 0.5 is a 2x zoom.
+    zoom_scale: float = Field(default=0.5, gt=0.05, le=1.0, alias="zoomScale")
+    audio_bitrate: int = Field(default=160_000, ge=32_000, le=512_000, alias="audioBitrate")
+    video_bitrate: int = Field(default=8_000_000, ge=500_000, le=80_000_000, alias="videoBitrate")
+
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/zoom")
+async def zoom_recording(req: ZoomRequest) -> dict[str, Any]:
+    """Render a zoomed edit from a take and its cursor track.
+
+    Unlike /remux this genuinely re-encodes every frame, so it is slow —
+    measured at roughly 2.5x realtime for a 2560x1440 source. It runs off the
+    event loop for the same reason /remux does, and more urgently: a long take
+    would otherwise block /health long enough for the supervisor to restart the
+    runtime in the middle of the render.
+    """
+    # Resolve the shapes BEFORE the try block. An HTTPException raised inside it
+    # would be caught by the broad handler below and re-wrapped as a 500 —
+    # verified: a request for an unknown shape answered 500 with the 422 buried
+    # in its message. A bad request must not look like a server fault.
+    if req.targets:
+        unknown = [t for t in req.targets if t not in zoom.KNOWN_TARGETS]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"unknown output shape(s): {', '.join(unknown)}. "
+                    f"Known shapes are {', '.join(sorted(zoom.KNOWN_TARGETS))}."
+                ),
+            )
+        # Preserve the caller's order — the first is primary — while dropping
+        # duplicates, which would collide on one output path.
+        seen: List[str] = []
+        for label in req.targets:
+            if label not in seen:
+                seen.append(label)
+        targets = tuple(zoom.KNOWN_TARGETS[label] for label in seen)
+    else:
+        # No shapes named: honour the explicit size, as before.
+        targets = (zoom.ZoomTarget("16x9", req.out_width, req.out_height),)
+
+    try:
+        result = await asyncio.to_thread(
+            zoom.render_zoom,
+            req.source,
+            req.cursor_track,
+            req.output,
+            targets=targets,
+            zoom_scale=req.zoom_scale,
+            audio_bitrate=req.audio_bitrate,
+            video_bitrate=req.video_bitrate,
+        )
+    except zoom.ZoomUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        # Never let the broad handler below re-wrap a deliberate status code as
+        # a 500. Verified the hard way: a 422 raised inside this block came back
+        # as "500 ... HTTPException: 422: ...", which tells a caller a bad
+        # request was a server fault.
+        raise
+    except Exception as exc:  # a broken container, a full disk — name it, never swallow it
+        log.exception("the zoom render failed for %s", req.source)
+        raise HTTPException(status_code=500, detail=f"the zoom render failed: {type(exc).__name__}: {exc}")
+    return result.as_dict()
+
+
+@app.post("/zoom/plan")
+async def zoom_plan(req: ZoomRequest) -> dict[str, Any]:
+    """The keyframes /zoom WOULD use, without rendering anything.
+
+    Cheap and instant, so the UI can show what the edit will do — and how many
+    zooms it found — before committing minutes to an encode.
+    """
+    try:
+        track = await asyncio.to_thread(zoom.load_cursor_track, req.cursor_track)
+        duration_ms = track.samples[-1].t_ms if track.samples else 0
+        plan = zoom.plan_zooms(track.samples, duration_ms, zoom_scale=req.zoom_scale)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "cursorTrack": req.cursor_track,
+        "display": track.display,
+        "samples": len(track.samples),
+        "durationMs": duration_ms,
+        **plan.as_dict(),
+    }
 
 
 # ─── /run_code ─────────────────────────────────────────────────────────────

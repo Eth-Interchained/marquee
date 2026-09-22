@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppWindow, Camera, Circle, Clapperboard, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
+import { AppWindow, Camera, Circle, Clapperboard, Crosshair, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
 import {
   getGetStudioSceneQueryKey,
   getListStudioEventsQueryKey,
@@ -32,14 +32,21 @@ import { Mixer } from '@/lib/studio/audio.ts';
 import { captureCamera, captureMic, captureScreen, stopStream, videoFor, type CaptureError } from '@/lib/studio/capture.ts';
 import { Compositor } from '@/lib/studio/compositor.ts';
 import {
+  countZooms,
+  fetchZoomPlan,
   finaliseToMp4,
   formatBytes,
   formatElapsed,
   pickRecordingFormat,
   RecordingSession,
+  renderZoomedEdit,
   type FinaliseResult,
   type RecorderState,
   type RecordingFormat,
+  ZOOM_SHAPES,
+  type ZoomPlanResult,
+  type ZoomRenderResult,
+  type ZoomShapeLabel,
 } from '@/lib/studio/recorder.ts';
 import { viewerUrls, WhipPublisher, type WhipState } from '@/lib/studio/whip.ts';
 import { Input } from '@/components/ui/input';
@@ -337,7 +344,24 @@ export function StudioSection({ workspace }: SectionProps) {
     return pickRecordingFormat((type) => MediaRecorder.isTypeSupported(type));
   }, []);
   const [recState, setRecState] = useState<RecorderState>({ kind: 'idle' });
-  const [take, setTake] = useState<{ path: string; bytes: number; durationMs: number; mp4: FinaliseResult | null } | null>(null);
+  const [take, setTake] = useState<{
+    path: string;
+    bytes: number;
+    durationMs: number;
+    mp4: FinaliseResult | null;
+    /** The cursor track beside it, when there was one. Null means no zoom pass. */
+    cursorTrack: string | null;
+    zoom: ZoomRenderResult | null;
+  } | null>(null);
+  const [zoomPlan, setZoomPlan] = useState<ZoomPlanResult | null>(null);
+  const [zooming, setZooming] = useState(false);
+  /**
+   * Which delivery shapes to render, in order — the first is primary and gets
+   * the plain `.zoomed.mp4`. Wide only by default: the source decodes once for
+   * all of them, but each still costs its own encode, so extra shapes are the
+   * operator's choice rather than a surprise on the clock.
+   */
+  const [zoomShapes, setZoomShapes] = useState<ZoomShapeLabel[]>(['16x9']);
   const [finalising, setFinalising] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -467,6 +491,61 @@ export function StudioSection({ workspace }: SectionProps) {
     [notify, record],
   );
 
+  /**
+   * Render the zoomed edit. Separate from finalising, and slower by orders of
+   * magnitude: the MP4 pass copies the video stream, this one re-encodes every
+   * frame. The operator is told the cost before it starts rather than left
+   * watching a spinner.
+   */
+  const renderZoom = useCallback(
+    async (source: string, cursorTrack: string, cause: string | null, shapes: readonly ZoomShapeLabel[]) => {
+      setZooming(true);
+      const startedAt = Date.now();
+      try {
+        // Ordered: the first shape is primary. One decode feeds them all.
+        const result = await renderZoomedEdit(source, cursorTrack, { targets: shapes });
+        setTake((t) => (t ? { ...t, zoom: result } : t));
+        notify(
+          'info',
+          `${result.outputs.length} zoomed edit${result.outputs.length === 1 ? '' : 's'} ready in ${result.tookSeconds}s: ` +
+            result.outputs.map((o) => `${o.label} ${o.width}×${o.height}`).join(', '),
+        );
+        await record(
+          'recording_zoomed',
+          {
+            source: result.source,
+            output: result.output,
+            cursorTrack: result.cursorTrack,
+            outputBytes: result.outputBytes,
+            width: result.width,
+            height: result.height,
+            frames: result.frames,
+            keyframes: result.keyframes,
+            durationSeconds: result.durationSeconds,
+            tookSeconds: result.tookSeconds,
+            shapes: result.outputs.map((o) => ({ label: o.label, path: o.path, bytes: o.bytes })),
+            notes: result.notes,
+          },
+          cause ? [cause] : [],
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Be precise about what survived. The take and its MP4 are untouched;
+        // only the extra pass failed, and conflating them would send someone
+        // looking for a recording that is sitting right there.
+        notify('error', `${message} The recording and its MP4 are untouched at ${source}.`);
+        await record(
+          'recording_error',
+          { phase: 'zoom', source, cursorTrack, message, afterSeconds: Math.round((Date.now() - startedAt) / 1000) },
+          cause ? [cause] : [],
+        );
+      } finally {
+        setZooming(false);
+      }
+    },
+    [notify, record],
+  );
+
   const stopRecording = useCallback(async () => {
     const session = sessionRef.current;
     if (!session) return;
@@ -475,7 +554,25 @@ export function StudioSection({ workspace }: SectionProps) {
     recEventIdRef.current = null;
     try {
       const closed = await session.stop();
-      setTake({ path: closed.path, bytes: closed.bytes, durationMs: closed.durationMs, mp4: null });
+      setTake({
+        path: closed.path,
+        bytes: closed.bytes,
+        durationMs: closed.durationMs,
+        mp4: null,
+        cursorTrack: closed.cursor?.path ?? null,
+        zoom: null,
+      });
+      setZoomPlan(null);
+      // Fetch the PLAN immediately — it is instant and says how many zooms the
+      // cursor actually justifies, so nobody commits minutes to an encode
+      // before knowing whether there is anything to see.
+      if (closed.cursor?.path) {
+        void fetchZoomPlan(closed.path, closed.cursor.path)
+          .then(setZoomPlan)
+          .catch((error: unknown) =>
+            notify('warn', `The zoom plan could not be read: ${error instanceof Error ? error.message : String(error)}`),
+          );
+      }
       notify('info', `Recording saved: ${closed.path} (${formatBytes(closed.bytes)})`);
       const stopped = await record(
         'recording_stopped',
@@ -1150,11 +1247,94 @@ export function StudioSection({ workspace }: SectionProps) {
                       Finalise to MP4
                     </Button>
                   )}
+                  {/* The zoom pass. Offered only when a cursor track exists,
+                      and it says the cost out loud: this one re-encodes. */}
+                  {take.cursorTrack ? (
+                    take.zoom ? (
+                      <>
+                        {take.zoom.outputs.map((shape) => (
+                          <p
+                            key={shape.label}
+                            className="break-all font-mono text-[10px] text-chart-4"
+                            data-testid={`text-take-zoom-${shape.label}`}
+                          >
+                            {shape.label} · {shape.width}×{shape.height} · {formatBytes(shape.bytes)} — {shape.path}
+                          </p>
+                        ))}
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {take.zoom.keyframes} keyframes · {take.zoom.frames} frames decoded once · {take.zoom.tookSeconds}s
+                        </p>
+                      </>
+                    ) : zooming ? (
+                      <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-zooming">
+                        Rendering the zoomed edit… this re-encodes every frame, so it takes longer than the take did.
+                      </p>
+                    ) : zoomPlan && countZooms(zoomPlan.keyframes) === 0 ? (
+                      <p className="text-[10px] text-muted-foreground" data-testid="text-no-zooms">
+                        {zoomPlan.notes[0] ?? 'The cursor never settled long enough to justify a zoom.'}
+                      </p>
+                    ) : (
+                      <>
+                        {/* Which shapes to render. Vertical is only worth
+                            offering because the cursor track exists: a 9:16
+                            crop of a 16:9 screen discards ~68% of the width,
+                            so a blind centre-crop would be useless. */}
+                        <div className="flex flex-wrap gap-1">
+                          {ZOOM_SHAPES.map((shape) => {
+                            const on = zoomShapes.includes(shape.label);
+                            return (
+                              <button
+                                key={shape.label}
+                                type="button"
+                                title={shape.hint}
+                                onClick={() =>
+                                  setZoomShapes((current) =>
+                                    current.includes(shape.label)
+                                      ? // Never leave nothing selected — there
+                                        // would be nothing to render.
+                                        current.length === 1
+                                        ? current
+                                        : current.filter((l) => l !== shape.label)
+                                      : [...current, shape.label],
+                                  )
+                                }
+                                className={cn(
+                                  'rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+                                  on
+                                    ? 'border-primary/60 bg-primary/15 text-foreground'
+                                    : 'border-border/60 text-muted-foreground hover:text-foreground',
+                                )}
+                                data-testid={`toggle-shape-${shape.label}`}
+                              >
+                                {shape.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7"
+                          onClick={() => void renderZoom(take.path, take.cursorTrack!, null, zoomShapes)}
+                          data-testid="button-zoom"
+                        >
+                          <Crosshair className="mr-1.5 h-3 w-3" />
+                          {zoomPlan
+                            ? `Zoomed edit · ${countZooms(zoomPlan.keyframes)} zoom${countZooms(zoomPlan.keyframes) === 1 ? '' : 's'}`
+                            : 'Zoomed edit'}
+                        </Button>
+                      </>
+                    )
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      No cursor track, so no zoomed edit for this take.
+                    </p>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
                     className="h-7 justify-start px-1.5 text-[11px]"
-                    onClick={() => void recording?.revealInFolder(take.mp4?.output ?? take.path)}
+                    onClick={() => void recording?.revealInFolder(take.zoom?.output ?? take.mp4?.output ?? take.path)}
                     data-testid="button-reveal"
                   >
                     <FolderOpen className="mr-1.5 h-3 w-3" /> Show in folder
@@ -1338,6 +1518,7 @@ const KIND_LABEL: Record<StudioEventKind, string> = {
   recording_started: 'recording started',
   recording_stopped: 'recording saved',
   recording_finalised: 'MP4 finalised',
+  recording_zoomed: 'zoomed edit rendered',
   recording_error: 'recording error',
 };
 
@@ -1388,6 +1569,7 @@ function ReceiptsCard({
                   e.kind === 'recording_started' && 'bg-destructive',
                   e.kind === 'recording_stopped' && 'bg-chart-1',
                   e.kind === 'recording_finalised' && 'bg-chart-4',
+                  e.kind === 'recording_zoomed' && 'bg-chart-5',
                   e.kind === 'recording_error' && 'bg-chart-3',
                 )}
               />
