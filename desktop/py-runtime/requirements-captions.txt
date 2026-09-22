@@ -1,0 +1,24 @@
+# Captions — OPTIONAL, and not installed by default.
+#
+# Local speech recognition, so a recording of something confidential never
+# leaves the machine it was recorded on. Enable with:
+#
+#     pip install -r requirements-captions.txt
+#
+# THE COST, stated because it is the reason this is not in requirements.txt:
+# roughly 262MB installed, plus ~75MB the first time a model is used. The base
+# runtime is 173MB, so this more than doubles it. Without these packages the
+# /captions route answers 501 and says how to enable it — the same contract
+# /remux and /zoom have without PyAV.
+#
+# MEASURED on real speech in the container MediaRecorder produces: the `tiny`
+# model was WORD-PERFECT at 6.2x realtime on CPU, `base` word-perfect at 3.5x.
+faster-whisper>=1.1.0
+
+# DELIBERATELY NOT INSTALLED: onnxruntime.
+#
+# faster-whisper lists it for Silero voice-activity filtering, which this
+# runtime does not use. Leaving it out (and sympy, which comes with it) saves
+# ~173MB — verified to leave transcription working unchanged. If a future
+# change wants `vad_filter=True`, it has to add onnxruntime back and own that
+# weight deliberately.

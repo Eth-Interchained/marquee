@@ -46,6 +46,7 @@ import termios
 import time
 from typing import Any, Optional, List
 
+import captions
 import remux
 import zoom
 
@@ -188,6 +189,9 @@ async def health() -> dict[str, Any]:
         # runtime can finalise to MP4. None means PyAV is missing.
         "remux": remux.library_versions(),
         "zoom": zoom.library_versions(),
+        # None when the optional captions extra is not installed, so the UI can
+        # say so instead of offering a button that answers 501.
+        "captions": captions.available(),
     }
 
 
@@ -339,6 +343,51 @@ async def zoom_plan(req: ZoomRequest) -> dict[str, Any]:
         "durationMs": duration_ms,
         **plan.as_dict(),
     }
+
+
+class CaptionRequest(BaseModel):
+    source: str = Field(min_length=1)
+    # `tiny` by default: measured WORD-PERFECT on real speech at 6.2x realtime,
+    # and the smallest download. Bigger models are available for accented or
+    # noisy audio at a proportional cost in time.
+    model: str = Field(default="tiny")
+    # None means detect. Naming the language skips detection and is more
+    # reliable on a take that opens with silence.
+    language: Optional[str] = None
+    formats: Optional[List[str]] = None
+
+    model_config = {"populate_by_name": True, "protected_namespaces": ()}
+
+
+@app.post("/captions")
+async def transcribe_recording(req: CaptionRequest) -> dict[str, Any]:
+    """Transcribe a take and write caption files beside it.
+
+    Runs off the event loop like the other long passes: a ten-minute take is
+    around ninety seconds of work, which on the event loop would block /health
+    long enough for the supervisor to restart the runtime mid-transcription.
+    """
+    formats = tuple(req.formats) if req.formats else ("srt", "vtt")
+    try:
+        result = await asyncio.to_thread(
+            captions.transcribe,
+            req.source,
+            model_size=req.model,
+            language=req.language,
+            formats=formats,
+        )
+    except captions.CaptionsUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:  # a corrupt take, a failed model download — name it
+        log.exception("transcription failed for %s", req.source)
+        raise HTTPException(status_code=500, detail=f"transcription failed: {type(exc).__name__}: {exc}")
+    return result.as_dict()
 
 
 # ─── /run_code ─────────────────────────────────────────────────────────────

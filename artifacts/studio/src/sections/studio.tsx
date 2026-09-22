@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppWindow, Camera, Circle, Clapperboard, Crosshair, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
+import { AppWindow, Camera, Captions, Circle, Clapperboard, Crosshair, FileVideo, FolderOpen, Mic, Monitor, MonitorUp, Radio, Receipt, ShieldCheck, ShieldAlert, Square, Volume2, X } from 'lucide-react';
 import {
   getGetStudioSceneQueryKey,
   getListStudioEventsQueryKey,
@@ -43,7 +43,11 @@ import {
   type FinaliseResult,
   type RecorderState,
   type RecordingFormat,
+  transcribeTake,
+  fetchRuntimeCapabilities,
   ZOOM_SHAPES,
+  type CaptionResult,
+  type RuntimeCapabilities,
   type ZoomPlanResult,
   type ZoomRenderResult,
   type ZoomShapeLabel,
@@ -352,6 +356,7 @@ export function StudioSection({ workspace }: SectionProps) {
     /** The cursor track beside it, when there was one. Null means no zoom pass. */
     cursorTrack: string | null;
     zoom: ZoomRenderResult | null;
+    captions: CaptionResult | null;
   } | null>(null);
   const [zoomPlan, setZoomPlan] = useState<ZoomPlanResult | null>(null);
   const [zooming, setZooming] = useState(false);
@@ -362,6 +367,13 @@ export function StudioSection({ workspace }: SectionProps) {
    * operator's choice rather than a surprise on the clock.
    */
   const [zoomShapes, setZoomShapes] = useState<ZoomShapeLabel[]>(['16x9']);
+  /**
+   * What the runtime's optional passes can actually do, read once from
+   * /health. Captions are a ~262MB extra, so the button is only offered when
+   * they are installed — an offer that answers 501 is worse than no offer.
+   */
+  const [runtime, setRuntime] = useState<RuntimeCapabilities | null>(null);
+  const [captioning, setCaptioning] = useState(false);
   const [finalising, setFinalising] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -546,6 +558,52 @@ export function StudioSection({ workspace }: SectionProps) {
     [notify, record],
   );
 
+  /**
+   * Transcribe the take. Separate pass, separate failure: captions failing
+   * says nothing about the recording, and the message says so.
+   */
+  const makeCaptions = useCallback(
+    async (source: string, cause: string | null) => {
+      setCaptioning(true);
+      try {
+        const result = await transcribeTake(source);
+        setTake((t) => (t ? { ...t, captions: result } : t));
+        if (result.notes.length > 0) {
+          // A silent take is a real outcome, not a failure — but an empty
+          // caption file with no explanation looks like a broken transcription.
+          for (const note of result.notes) notify('warn', note);
+        } else {
+          notify(
+            'info',
+            `Captions ready: ${result.cues} cue${result.cues === 1 ? '' : 's'} in ${result.language} ` +
+              `(${result.tookSeconds}s, ${result.realtimeFactor}× realtime) — ${result.outputs.map((o) => o.format.toUpperCase()).join(' + ')}`,
+          );
+        }
+        await record(
+          'recording_captioned',
+          {
+            source: result.source,
+            model: result.model,
+            language: result.language,
+            languageProbability: result.languageProbability,
+            cues: result.cues,
+            words: result.words,
+            tookSeconds: result.tookSeconds,
+            outputs: result.outputs.map((o) => ({ format: o.format, path: o.path })),
+          },
+          cause ? [cause] : [],
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notify('error', `${message} The recording itself is untouched at ${source}.`);
+        await record('recording_error', { phase: 'captions', source, message }, cause ? [cause] : []);
+      } finally {
+        setCaptioning(false);
+      }
+    },
+    [notify, record],
+  );
+
   const stopRecording = useCallback(async () => {
     const session = sessionRef.current;
     if (!session) return;
@@ -561,6 +619,7 @@ export function StudioSection({ workspace }: SectionProps) {
         mp4: null,
         cursorTrack: closed.cursor?.path ?? null,
         zoom: null,
+        captions: null,
       });
       setZoomPlan(null);
       // Fetch the PLAN immediately — it is instant and says how many zooms the
@@ -672,6 +731,13 @@ export function StudioSection({ workspace }: SectionProps) {
     window.addEventListener('pagehide', release);
     return () => window.removeEventListener('pagehide', release);
   }, []);
+
+  // What the runtime can do, read once. A failure here hides the optional
+  // buttons rather than breaking the Studio — and says why in the console.
+  useEffect(() => {
+    if (!recording) return;
+    void fetchRuntimeCapabilities().then(setRuntime);
+  }, [recording]);
 
   useEffect(() => {
     compositorRef.current?.setScene(scene);
@@ -1330,6 +1396,43 @@ export function StudioSection({ workspace }: SectionProps) {
                       No cursor track, so no zoomed edit for this take.
                     </p>
                   )}
+                  {/* Captions. Offered only when the optional extra is
+                      actually installed — a button that answers 501 is worse
+                      than no button. */}
+                  {take.captions ? (
+                    <>
+                      {take.captions.outputs.map((file) => (
+                        <p
+                          key={file.format}
+                          className="break-all font-mono text-[10px] text-chart-2"
+                          data-testid={`text-captions-${file.format}`}
+                        >
+                          {file.format.toUpperCase()} — {file.path}
+                        </p>
+                      ))}
+                      <p className="font-mono text-[10px] text-muted-foreground">
+                        {take.captions.cues} cues · {take.captions.words} words · {take.captions.language} · {take.captions.realtimeFactor}× realtime
+                      </p>
+                    </>
+                  ) : captioning ? (
+                    <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-captioning">
+                      Transcribing on this machine… nothing is uploaded.
+                    </p>
+                  ) : runtime?.captions ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7"
+                      onClick={() => void makeCaptions(take.path, null)}
+                      data-testid="button-captions"
+                    >
+                      <Captions className="mr-1.5 h-3 w-3" /> Captions
+                    </Button>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground" data-testid="text-captions-unavailable">
+                      Captions are an optional extra (~262MB) and are not installed in this build.
+                    </p>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1519,6 +1622,7 @@ const KIND_LABEL: Record<StudioEventKind, string> = {
   recording_stopped: 'recording saved',
   recording_finalised: 'MP4 finalised',
   recording_zoomed: 'zoomed edit rendered',
+  recording_captioned: 'captions transcribed',
   recording_error: 'recording error',
 };
 
@@ -1570,6 +1674,7 @@ function ReceiptsCard({
                   e.kind === 'recording_stopped' && 'bg-chart-1',
                   e.kind === 'recording_finalised' && 'bg-chart-4',
                   e.kind === 'recording_zoomed' && 'bg-chart-5',
+                  e.kind === 'recording_captioned' && 'bg-chart-2',
                   e.kind === 'recording_error' && 'bg-chart-3',
                 )}
               />

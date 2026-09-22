@@ -41,6 +41,7 @@ export const EVENT_KINDS = [
   "recording_stopped",
   "recording_finalised",
   "recording_zoomed",
+  "recording_captioned",
   "recording_error",
 ] as const;
 export type StudioEventKind = (typeof EVENT_KINDS)[number];

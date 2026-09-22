@@ -23,5 +23,6 @@ export const StudioEventKind = {
   recording_stopped: 'recording_stopped',
   recording_finalised: 'recording_finalised',
   recording_zoomed: 'recording_zoomed',
+  recording_captioned: 'recording_captioned',
   recording_error: 'recording_error',
 } as const;

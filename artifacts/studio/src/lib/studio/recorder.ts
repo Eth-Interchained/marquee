@@ -497,3 +497,70 @@ export function renderZoomedEdit(
   // expensive half of the render.
   return runtimePost<ZoomRenderResult>('/runtime/zoom', { source, cursorTrack, ...options }, fetchImpl);
 }
+
+
+/**
+ * Captions, transcribed on this machine and nowhere else.
+ *
+ * The runtime is already here, so local speech recognition is a dependency
+ * rather than an architecture — and a recording of something confidential
+ * never leaves the disk it was recorded to.
+ *
+ * It is an OPTIONAL extra (roughly 262MB), so `/health` reports whether it is
+ * installed and the UI checks before offering it. Without it the route answers
+ * 501 with the command to enable it, the same contract the MP4 pass has
+ * without PyAV.
+ */
+export type CaptionOutput = { format: string; path: string; bytes: string };
+
+export type CaptionResult = {
+  source: string;
+  model: string;
+  language: string;
+  languageProbability: number;
+  durationSeconds: number;
+  cues: number;
+  words: number;
+  tookSeconds: number;
+  realtimeFactor: number | null;
+  outputs: CaptionOutput[];
+  text: string;
+  notes: string[];
+};
+
+export function transcribeTake(
+  source: string,
+  options: { model?: string; language?: string; formats?: readonly string[] } = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<CaptionResult> {
+  return runtimePost<CaptionResult>('/runtime/captions', { source, ...options }, fetchImpl);
+}
+
+/**
+ * What `/health` says about the runtime's optional passes. Pure shape; the
+ * Studio reads it so a button is only offered when it can actually work.
+ */
+export type RuntimeCapabilities = {
+  remux: Record<string, string> | null;
+  zoom: { pyav: string; crop: boolean; scale: boolean } | null;
+  captions: { fasterWhisper: string; ctranslate2: string; models: string[] } | null;
+};
+
+export async function fetchRuntimeCapabilities(
+  fetchImpl: typeof fetch = fetch,
+): Promise<RuntimeCapabilities | null> {
+  try {
+    const response = await fetchImpl('/runtime/health');
+    if (!response.ok) {
+      // Not fatal — it means the optional passes cannot be offered. Say which
+      // status, so "the button is missing" is diagnosable.
+      console.warn(`[studio] /runtime/health answered ${response.status}; optional passes will be hidden`);
+      return null;
+    }
+    const body = (await response.json()) as Partial<RuntimeCapabilities>;
+    return { remux: body.remux ?? null, zoom: body.zoom ?? null, captions: body.captions ?? null };
+  } catch (error) {
+    console.warn('[studio] could not read /runtime/health; optional passes will be hidden', error);
+    return null;
+  }
+}
