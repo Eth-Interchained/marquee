@@ -483,6 +483,41 @@ export function StudioSection({ workspace }: SectionProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Release the capture devices when the page goes away, not only when React
+   * unmounts.
+   *
+   * On app quit the renderer is torn down without React ever unmounting the
+   * Studio, so the effect cleanup above never runs and the OS capture device
+   * keeps producing frames nobody drains. On macOS that shows up as a flood of
+   *
+   *   pixel_buffer_pool.mm] Cannot exceed the pool's maximum buffer count
+   *   sample_buffer_transformer.cc] Failed to create a destination buffer
+   *
+   * at camera frame cadence, all the way through shutdown. Cosmetic — the app
+   * exits and no recording is lost, because the shell flushes and closes any
+   * open take before this point — but it buries the real shutdown log.
+   *
+   * `pagehide` rather than `beforeunload`: it fires for the page being
+   * discarded as well as navigated away from, and it must not be cancellable
+   * or a stuck handler could block the quit. Best effort by nature — a hard
+   * renderer kill runs nothing, and the OS reclaims the device anyway.
+   */
+  useEffect(() => {
+    const release = () => {
+      for (const stream of Object.values(streamsRef.current)) stopStream(stream);
+      streamsRef.current = {};
+      mixerRef.current?.close().catch((error: unknown) => {
+        // Say why, even on the way out: a mixer that will not close is worth
+        // seeing, and swallowing it here is indistinguishable from success.
+        console.error('[studio] the mixer could not be closed while releasing devices', error);
+      });
+      mixerRef.current = null;
+    };
+    window.addEventListener('pagehide', release);
+    return () => window.removeEventListener('pagehide', release);
+  }, []);
+
   useEffect(() => {
     compositorRef.current?.setScene(scene);
   }, [scene]);
